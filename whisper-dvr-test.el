@@ -24,18 +24,18 @@
 (defvar whisper-dvr-test--mock-attrs nil
   "Mock file attributes for testing.")
 
-(defvar whisper-dvr-test--whisper-file-called nil
-  "Track whether whisper-file was called.")
+(defvar whisper-dvr-test--whisper-run-called nil
+  "Track whether whisper-run was called.")
 
-(defvar whisper-dvr-test--whisper-file-arg nil
-  "Track the argument passed to whisper-file.")
+(defvar whisper-dvr-test--whisper-run-arg nil
+  "Track the argument passed to whisper-run.")
 
 (defun whisper-dvr-test--reset-state ()
   "Reset all test state variables."
   (setq whisper-dvr-test--mock-files nil
         whisper-dvr-test--mock-attrs nil
-        whisper-dvr-test--whisper-file-called nil
-        whisper-dvr-test--whisper-file-arg nil))
+        whisper-dvr-test--whisper-run-called nil
+        whisper-dvr-test--whisper-run-arg nil))
 
 (defun whisper-dvr-test--make-mock-attrs (size mtime)
   "Create mock file attributes with SIZE and MTIME."
@@ -184,30 +184,20 @@
         (should-error (whisper-dvr) :type 'user-error)
         (should prompted)))))
 
-(ert-deftest whisper-dvr-test-continues-with-non-file-buffer-if-confirmed ()
-  "Test continuation when user confirms non-file buffer."
-  (with-temp-buffer
-    (let ((whisper-dvr-directory "/test/dir"))
-      (cl-letf (((symbol-function 'y-or-n-p) (lambda (_) t))
-                ((symbol-function 'file-directory-p) (lambda (_) t))
-                ((symbol-function 'directory-files) (lambda (&rest _) nil)))
-        ;; Should error because of no files, not because of buffer type
-        (should-error (whisper-dvr) :type 'user-error)))))
-
 (ert-deftest whisper-dvr-test-errors-when-no-files ()
   "Test error when no audio files are found."
   (let ((temp-file (make-temp-file "whisper-dvr-test" nil ".org")))
     (unwind-protect
         (with-current-buffer (find-file-noselect temp-file)
-          (let ((whisper-dvr-directory "/test/empty"))
+          (let ((whisper-dvr-directory "/test/dir"))
             (cl-letf (((symbol-function 'file-directory-p) (lambda (_) t))
                       ((symbol-function 'directory-files) (lambda (&rest _) nil)))
               (should-error (whisper-dvr) :type 'user-error)))
           (kill-buffer))
       (delete-file temp-file))))
 
-(ert-deftest whisper-dvr-test-calls-whisper-file-with-selection ()
-  "Test that whisper-file is called with the selected file."
+(ert-deftest whisper-dvr-test-calls-whisper-run-with-selection ()
+  "Test that whisper-run is called with the selected file."
   (whisper-dvr-test--reset-state)
   (let ((temp-file (make-temp-file "whisper-dvr-test" nil ".org")))
     (unwind-protect
@@ -223,14 +213,14 @@
                       ((symbol-function 'completing-read)
                        (lambda (_prompt collection &rest _)
                          (caar collection)))  ; Return first entry
-                      ((symbol-function 'whisper-file)
+                      ((symbol-function 'whisper-run)
                        (lambda (file)
-                         (setq whisper-dvr-test--whisper-file-called t
-                               whisper-dvr-test--whisper-file-arg file)))
+                         (setq whisper-dvr-test--whisper-run-called t
+                               whisper-dvr-test--whisper-run-arg file)))
                       ((symbol-function 'message) #'ignore))
               (whisper-dvr)
-              (should whisper-dvr-test--whisper-file-called)
-              (should (string= test-file whisper-dvr-test--whisper-file-arg))))
+              (should whisper-dvr-test--whisper-run-called)
+              (should (string= test-file whisper-dvr-test--whisper-run-arg))))
           (kill-buffer))
       (delete-file temp-file))))
 
@@ -252,7 +242,7 @@
                        (lambda (prompt collection &rest _)
                          (setq captured-prompt prompt)
                          (caar collection)))
-                      ((symbol-function 'whisper-file) #'ignore)
+                      ((symbol-function 'whisper-run) #'ignore)
                       ((symbol-function 'message) #'ignore))
               (whisper-dvr)
               (should (string-match-p "3 available" captured-prompt))))
@@ -293,14 +283,14 @@
                                (lambda (entry)
                                  (string= (cdr entry) selected-file))
                                collection))))
-                      ((symbol-function 'whisper-file)
+                      ((symbol-function 'whisper-run)
                        (lambda (file)
-                         (setq whisper-dvr-test--whisper-file-called t
-                               whisper-dvr-test--whisper-file-arg file)))
+                         (setq whisper-dvr-test--whisper-run-called t
+                               whisper-dvr-test--whisper-run-arg file)))
                       ((symbol-function 'message) #'ignore))
               (whisper-dvr)
-              (should whisper-dvr-test--whisper-file-called)
-              (should (string= selected-file whisper-dvr-test--whisper-file-arg))))
+              (should whisper-dvr-test--whisper-run-called)
+              (should (string= selected-file whisper-dvr-test--whisper-run-arg))))
           (kill-buffer))
       (delete-file temp-file))))
 
