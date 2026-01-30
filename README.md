@@ -1,5 +1,5 @@
 # whisper-dvr
-![Version](https://img.shields.io/static/v1?label=whisper-dvr&message=0.1&color=brightcolor)
+<!-- ![Version](https://img.shields.io/static/v1?label=whisper-dvr&message=0.1&color=brightcolor)-->
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Emacs](https://img.shields.io/badge/Emacs-27.1+-purple.svg)](https://www.gnu.org/software/emacs/)
 
