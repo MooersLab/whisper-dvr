@@ -65,7 +65,7 @@ M-x package-install RET whisper-dvr RET
 
 ```elisp
 (straight-use-package
- '(whisper-dvr :type git :host github :repo "yourusername/whisper-dvr"))
+ '(whisper-dvr :type git :host github :repo "MooersLab/whisper-dvr"))
 ```
 
 ### Manual Installation
@@ -73,7 +73,7 @@ M-x package-install RET whisper-dvr RET
 1. Clone the repository:
 
 ```bash
-git clone https://github.com/yourusername/whisper-dvr.git ~/.emacs.d/site-lisp/whisper-dvr
+git clone https://github.com/MooersLab/whisper-dvr.git ~/.emacs.d/site-lisp/whisper-dvr
 ```
 
 2. Add to your init file:
