@@ -1,7 +1,6 @@
 # whisper-dvr
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
-[![MELPA](https://melpa.org/packages/whisper-dvr-badge.svg)](https://melpa.org/#/whisper-dvr)
 [![Emacs](https://img.shields.io/badge/Emacs-27.1+-purple.svg)](https://www.gnu.org/software/emacs/)
 
 Transcribe audio files from digital voice recorders directly in Emacs using [whisper.el](https://github.com/natruj/whisper.el).
