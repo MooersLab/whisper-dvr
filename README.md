@@ -9,7 +9,7 @@ Transcribe audio files from digital voice recorders directly in Emacs using [whi
 This package negates the need to change file paths from that for the current file path to that of the audio file when running whisper-file.
 It reduces the friction associated with transcribing multiple audio files daily such as the two associated with morning and evening commutes.
 
-<p align="center"><img src="./images/audioFilesListing.png" alt="HTML5 Icon" style="width:514px;height:145px;"></p>
+<p align="center"><img src="./images/audioFileListing.png" alt="HTML5 Icon" style="width:514px;height:145px;"></p>
 
 
 ## Table of Contents
