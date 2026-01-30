@@ -10,7 +10,7 @@
 This manual is for whisper-dvr (version 0.1.0), a package for
 transcribing audio files from digital voice recorders using whisper.el.
 
-Copyright @copyright{} 2024 Blaine Mooers
+Copyright @copyright{} 2026 Blaine Mooers
 
 @quotation
 Permission is granted to copy, distribute and/or modify this document
