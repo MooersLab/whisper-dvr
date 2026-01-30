@@ -1,36 +1,32 @@
-\input texinfo   @c -*-texinfo-*-
+\input texinfo   @c -*- texinfo -*-
 @c %**start of header
 @setfilename whisper-dvr.info
-@settitle Whisper DVR Manual
+@settitle whisper-dvr User Manual
 @documentencoding UTF-8
 @documentlanguage en
 @c %**end of header
 
 @copying
-This manual is for whisper-dvr (version 0.1.0), a package for
-transcribing audio files from digital voice recorders using whisper.el.
+This manual is for whisper-dvr (version 0.2.0).
 
-Copyright @copyright{} 2026 Blaine Mooers
+Copyright @copyright{} 2024-2025 Blaine Mooers.
 
 @quotation
 Permission is granted to copy, distribute and/or modify this document
 under the terms of the GNU Free Documentation License, Version 1.3 or
 any later version published by the Free Software Foundation; with no
-Invariant Sections, no Front-Cover Texts, and no Back-Cover Texts.  A
-copy of the license is included in the section entitled ``GNU Free
-Documentation License''.
+Invariant Sections, no Front-Cover Texts, and no Back-Cover Texts.
 @end quotation
 @end copying
 
-@dircategory Emacs misc features
+@dircategory Emacs
 @direntry
-* Whisper DVR: (whisper-dvr).   Transcribe audio files from digital voice recorders.
+* whisper-dvr: (whisper-dvr).   Transcribe audio files from DVR with whisper.el.
 @end direntry
 
 @titlepage
-@title Whisper DVR Manual
-@subtitle Transcribe Audio Files from Digital Voice Recorders
-@subtitle Version 0.1.0
+@title whisper-dvr User Manual
+@subtitle Transcribe audio files from DVR with whisper.el
 @author Blaine Mooers
 @page
 @vskip 0pt plus 1filll
@@ -41,528 +37,245 @@ Documentation License''.
 
 @ifnottex
 @node Top
-@top Whisper DVR
+@top whisper-dvr
 
-This manual describes whisper-dvr, an Emacs package for transcribing
-audio files from digital voice recorders using the whisper.el package.
+whisper-dvr is an Emacs package that provides a convenient interface
+for transcribing audio files from a digital voice recorder using
+whisper.el.
 
 @insertcopying
 @end ifnottex
 
 @menu
-* Introduction::                Overview of whisper-dvr.
-* Installation::                How to install the package.
-* Configuration::               Customizing whisper-dvr.
-* Usage::                       How to use the package.
-* Commands::                    Interactive commands.
-* Internal Functions::          Non-interactive functions.
-* Testing::                     Running the test suite.
-* Troubleshooting::             Common issues and solutions.
-* GNU Free Documentation License:: License for this manual.
-* Index::                       Complete index.
+* Introduction::        Overview of whisper-dvr
+* Installation::        How to install whisper-dvr
+* Configuration::       Configuring whisper-dvr
+* Usage::               How to use whisper-dvr
+* Customization::       Available customization options
+* Troubleshooting::     Common issues and solutions
+* Contributing::        How to contribute
+* License::             License information
+* Index::               Complete index
 @end menu
 
 @node Introduction
 @chapter Introduction
-@cindex introduction
 
-Whisper-dvr is an Emacs package that provides a convenient interface for
-transcribing audio files from digital voice recorders (DVRs) using the
-whisper.el package.  It streamlines the workflow of selecting audio files
-from a DVR and inserting transcriptions directly into your current buffer.
+whisper-dvr is a companion package for whisper.el that simplifies the
+workflow of transcribing audio files from a digital voice recorder
+(DVR).
 
 @section Features
-@cindex features
 
 @itemize @bullet
 @item
-Interactive file selection with completion, displaying filename, size,
-and modification time.
-
+Lists all audio files from your DVR directory
 @item
-Support for multiple audio formats including MP3, WAV, and M4A.
-
+Displays file information (name, size, modification time)
 @item
-Integration with whisper.el for high-quality transcription using
-OpenAI's Whisper model.
-
+Supports multiple audio formats (MP3, WAV, M4A)
 @item
-Configurable DVR directory path for different recorder setups.
-
+Integrates seamlessly with whisper.el for transcription
 @item
-Safety checks to prevent accidental overwrites in read-only buffers.
+Inserts transcription directly at point
 @end itemize
 
 @section Requirements
-@cindex requirements
 
 @itemize @bullet
 @item
 Emacs 27.1 or later
-
 @item
-whisper.el package (available from MELPA)
-
+whisper.el (@url{https://github.com/natrys/whisper.el})
 @item
-A working Whisper installation (whisper.cpp or OpenAI Whisper)
+A working whisper.cpp installation (handled by whisper.el)
 @end itemize
 
 @node Installation
 @chapter Installation
-@cindex installation
 
-@section From MELPA
-@cindex MELPA installation
-
-Once whisper-dvr is available on MELPA, you can install it using the
-following methods:
-
-@subsection Using package.el
-
-@lisp
-M-x package-refresh-contents RET
-M-x package-install RET whisper-dvr RET
-@end lisp
-
-@subsection Using use-package
+@section Using straight.el
+@cindex installation, straight.el
 
 @lisp
 (use-package whisper-dvr
-  :ensure t
+  :straight (whisper-dvr :type git :host github
+                         :repo "MooersLab/whisper-dvr")
   :after whisper
-  :custom
-  (whisper-dvr-directory "/Volumes/IC RECORDER/REC_FILE/FOLDER01"))
+  :bind ("C-c w d" . whisper-dvr))
 @end lisp
 
 @section Manual Installation
-@cindex manual installation
+@cindex installation, manual
 
-Clone the repository and add it to your load path:
+@enumerate
+@item
+Clone the repository:
 
 @example
-git clone https://github.com/yourusername/whisper-dvr.git ~/.emacs.d/site-lisp/whisper-dvr
+git clone https://github.com/MooersLab/whisper-dvr.git
 @end example
 
-Then add to your init file:
+@item
+Add to your load-path:
 
 @lisp
-(add-to-list 'load-path "~/.emacs.d/site-lisp/whisper-dvr")
+(add-to-list 'load-path "/path/to/whisper-dvr")
 (require 'whisper-dvr)
 @end lisp
-
-@section Installing the Info Manual
-@cindex info manual installation
-
-To install the Info manual for access within Emacs:
-
-@example
-cd /path/to/whisper-dvr
-make info
-sudo make install-info
-@end example
-
-Alternatively, install to a user directory:
-
-@example
-make install-info PREFIX=~/.local
-@end example
-
-Then add the directory to @code{Info-additional-directory-list}:
-
-@lisp
-(add-to-list 'Info-additional-directory-list "~/.local/share/info")
-@end lisp
+@end enumerate
 
 @node Configuration
 @chapter Configuration
 @cindex configuration
 
-Whisper-dvr provides several customization options accessible through
-the Emacs customization interface or by setting variables directly.
-
-@section Customization Group
-@cindex customization group
-
-All whisper-dvr options are in the @code{whisper-dvr} customization group:
+Basic configuration:
 
 @lisp
-M-x customize-group RET whisper-dvr RET
-@end lisp
-
-@section Configuration Variables
-
-@defopt whisper-dvr-directory
-@vindex whisper-dvr-directory
-The directory path containing audio files from the digital voice recorder.
-This should point to the folder where your DVR stores recordings.
-
-Default value: @code{"/Volumes/IC RECORDER/REC_FILE/FOLDER01"}
-
-Example configuration for different operating systems:
-
-@lisp
-;; macOS with Sony IC Recorder
 (setq whisper-dvr-directory "/Volumes/IC RECORDER/REC_FILE/FOLDER01")
-
-;; Linux with mounted USB device
-(setq whisper-dvr-directory "/media/user/IC_RECORDER/VOICE")
-
-;; Windows
-(setq whisper-dvr-directory "E:/REC_FILE/FOLDER01")
+(global-set-key (kbd "C-c w d") #'whisper-dvr)
 @end lisp
-@end defopt
 
-@defopt whisper-dvr-file-extensions
-@vindex whisper-dvr-file-extensions
-A list of audio file extensions to include when listing files from the
-DVR directory.
-
-Default value: @code{("mp3" "wav" "m4a")}
-
-To add support for additional formats:
-
-@lisp
-(setq whisper-dvr-file-extensions '("mp3" "wav" "m4a" "ogg" "flac"))
-@end lisp
-@end defopt
+Set the directory to match where your DVR mounts on your system.
 
 @node Usage
 @chapter Usage
-@cindex usage
 
-This chapter describes the typical workflow for using whisper-dvr to
-transcribe audio files from your digital voice recorder.
-
-@section Basic Workflow
-@cindex basic workflow
+@section Basic Usage
+@cindex usage, basic
 
 @enumerate
 @item
-Connect your digital voice recorder to your computer and ensure it is
-mounted.
+Connect your digital voice recorder to your computer.
 
 @item
-Open or create a buffer where you want the transcription to appear.
-Position the cursor where you want the text inserted.
+Open an Emacs buffer where you want the transcription inserted.
 
 @item
-Run @kbd{M-x whisper-dvr}.
+Run @kbd{M-x whisper-dvr} or press @kbd{C-c w d}.
 
 @item
-Select an audio file from the completion list.  The list shows the
-filename, file size, and modification date for each recording.
+Select an audio file from the completion list.
 
 @item
-Wait for the transcription to complete.  The text will be inserted at
-point in your buffer.
+Wait for the transcription to complete.
 @end enumerate
 
-@section Example Session
-@cindex example session
+@section Changing the DVR Directory
+@cindex directory, changing
+@findex whisper-dvr-set-directory
+
+If your DVR is mounted at a different location:
 
 @example
-;; Open a new org-mode file for meeting notes
-C-x C-f ~/notes/meeting-2024-01-15.org RET
-
-;; Position cursor where transcription should appear
-;; Then invoke whisper-dvr
-M-x whisper-dvr RET
-
-;; Select from the completion list:
-;; recording001.mp3    2.1M  2024-01-15 10:30
-;; recording002.mp3    1.8M  2024-01-15 14:45
-;; ...
-
-;; Choose the desired file and press RET
-;; Transcription is inserted at point
+M-x whisper-dvr-set-directory RET /path/to/dvr RET
 @end example
 
-@section Setting the DVR Directory
-@cindex setting directory
-
-If your DVR uses a different mount point or folder structure, you can
-change the directory interactively:
-
-@example
-M-x whisper-dvr-set-directory RET
-Set DVR directory: /media/user/RECORDER/VOICE RET
-@end example
-
-This change persists for the current Emacs session.  To make it
-permanent, add the configuration to your init file.
-
-@node Commands
-@chapter Commands
+@section Interactive Commands
 @cindex commands
 
-This chapter documents all interactive commands provided by whisper-dvr.
-
-@deffn Command whisper-dvr
+@table @code
+@item whisper-dvr
 @findex whisper-dvr
-List audio files from the configured DVR directory and transcribe the
-selected file using whisper.el.  The transcription is inserted at point
-in the current buffer.
+List audio files from the DVR directory and transcribe the selected file.
+Default keybinding: @kbd{C-c w d}.
 
-This command performs the following checks before proceeding:
-
-@itemize @bullet
-@item
-Verifies that the current buffer is not read-only.
-
-@item
-Warns if the current buffer is not visiting a file (prompts for
-confirmation to continue).
-
-@item
-Verifies that the DVR directory exists and contains audio files.
-@end itemize
-
-The completion interface displays each file with its name, human-readable
-size, and modification timestamp.
-
-Keybinding suggestion:
-
-@lisp
-(global-set-key (kbd "C-c w d") 'whisper-dvr)
-@end lisp
-@end deffn
-
-@deffn Command whisper-dvr-set-directory dir
+@item whisper-dvr-set-directory
 @findex whisper-dvr-set-directory
-Interactively set the DVR directory to @var{dir}.  When called
-interactively, prompts for the directory path with completion.
-
-This is useful when you have multiple recording devices or when the
-mount point changes between sessions.
-
-@lisp
-;; Called programmatically:
-(whisper-dvr-set-directory "/path/to/new/dvr")
-@end lisp
-@end deffn
-
-@node Internal Functions
-@chapter Internal Functions
-@cindex internal functions
-
-This chapter documents the internal functions used by whisper-dvr.
-These functions are not intended for direct use but are documented here
-for developers who wish to extend or modify the package.
-
-@defun whisper-dvr--list-audio-files
-@findex whisper-dvr--list-audio-files
-Return a list of audio files in @code{whisper-dvr-directory}.  Files are
-filtered by the extensions specified in @code{whisper-dvr-file-extensions}.
-
-Signals a @code{user-error} if the directory does not exist.
-
-Returns a list of absolute file paths.
-@end defun
-
-@defun whisper-dvr--format-file-entry filepath
-@findex whisper-dvr--format-file-entry
-Format @var{filepath} for display in the completion list.  Returns a
-string containing the filename (without directory), human-readable file
-size, and modification timestamp.
-
-The format is designed to align columns for easy scanning:
-
-@example
-filename.mp3                              2.1M  2024-01-15 10:30
-@end example
-@end defun
-
-@node Testing
-@chapter Testing
-@cindex testing
-
-Whisper-dvr includes a comprehensive test suite using ERT (Emacs Lisp
-Regression Testing).  This chapter describes how to run the tests and
-the structure of the test suite.
-
-@section Running Tests
-@cindex running tests
-
-@subsection From the Command Line
-
-Use the provided Makefile to run all tests:
-
-@example
-cd /path/to/whisper-dvr
-make test
-@end example
-
-To run tests with verbose output:
-
-@example
-make test-verbose
-@end example
-
-@subsection From Within Emacs
-
-Load the test file and run ERT:
-
-@lisp
-(load-file "whisper-dvr-test.el")
-M-x ert RET t RET
-@end lisp
-
-To run a specific test:
-
-@lisp
-M-x ert RET whisper-dvr-test-default-directory RET
-@end lisp
-
-@section Test Categories
-@cindex test categories
-
-The test suite is organized into several categories:
-
-@table @strong
-@item Unit Tests: Custom Variables
-Tests that verify the default values of customization options.
-
-@item Unit Tests: whisper-dvr--list-audio-files
-Tests for the file listing function, including error handling for
-non-existent directories and extension filtering.
-
-@item Unit Tests: whisper-dvr--format-file-entry
-Tests for the file entry formatting function, verifying correct display
-of filenames, sizes, and timestamps.
-
-@item Unit Tests: whisper-dvr-set-directory
-Tests for the directory setting command.
-
-@item Unit Tests: whisper-dvr
-Tests for the main interactive command, including buffer state checks.
-
-@item Integration Tests
-End-to-end tests that verify the complete workflow from file selection
-to transcription invocation.
-
-@item Edge Case Tests
-Tests for unusual inputs such as special characters in filenames, very
-large files, and zero-size files.
+Interactively set the DVR directory path.
 @end table
 
-@section Test Helpers
-@cindex test helpers
+@node Customization
+@chapter Customization
 
-The test file provides several helper functions and variables for mocking:
+@section whisper-dvr-directory
+@vindex whisper-dvr-directory
+@cindex customization, directory
 
-@defvar whisper-dvr-test--mock-files
-Mock file list for testing.
-@end defvar
+The directory path where your DVR stores recordings.
 
-@defvar whisper-dvr-test--mock-attrs
-Mock file attributes for testing.
-@end defvar
+Default: @code{"/Volumes/IC RECORDER/REC_FILE/FOLDER01"}
 
-@defvar whisper-dvr-test--whisper-file-called
-Boolean flag tracking whether @code{whisper-file} was called.
-@end defvar
+@lisp
+(setq whisper-dvr-directory "/your/dvr/path")
+@end lisp
 
-@defvar whisper-dvr-test--whisper-file-arg
-Stores the argument passed to @code{whisper-file}.
-@end defvar
+@section whisper-dvr-file-extensions
+@vindex whisper-dvr-file-extensions
+@cindex customization, file extensions
 
-@defun whisper-dvr-test--reset-state
-Reset all test state variables to their initial values.
-@end defun
+List of audio file extensions to include when listing files.
 
-@defun whisper-dvr-test--make-mock-attrs size mtime
-Create mock file attributes with the given @var{size} (in bytes) and
-@var{mtime} (modification time).
-@end defun
+Default: @code{'("mp3" "wav" "m4a")}
+
+@lisp
+(setq whisper-dvr-file-extensions '("mp3" "wav" "m4a" "ogg"))
+@end lisp
 
 @node Troubleshooting
 @chapter Troubleshooting
 @cindex troubleshooting
 
-This chapter addresses common issues and their solutions.
+@section DVR directory does not exist
+@cindex error, directory not found
 
-@section DVR Directory Not Found
-@cindex directory not found
+Ensure your DVR is connected and mounted.  Check the mount path with:
 
-@strong{Error:} @code{DVR directory does not exist: /Volumes/IC RECORDER/...}
+@example
+ls /Volumes/  # macOS
+ls /media/    # Linux
+@end example
 
-@strong{Solutions:}
+@section No audio files found
+@cindex error, no files found
+
+Verify that:
+@itemize @bullet
+@item
+The directory path is correct
+@item
+The directory contains files with supported extensions
+@item
+File permissions allow reading
+@end itemize
+
+@section Transcription starts recording instead of transcribing
+@cindex error, wrong number of arguments
+@cindex whisper-file, API change
+
+This was a bug in versions prior to 0.2.0.  The issue occurred because
+@code{whisper-file} in whisper.el changed from accepting a file path
+argument to being an interactive-only function.
+
+Update to version 0.2.0 or later, which correctly calls @code{whisper-run}
+with the file path directly.
+
+@node Contributing
+@chapter Contributing
+@cindex contributing
+
+Contributions are welcome!
 
 @enumerate
 @item
-Ensure your digital voice recorder is connected and mounted.
-
+Fork the repository on GitHub
 @item
-Check the mount point on your system.  On macOS, use Finder or
-@code{ls /Volumes/}.  On Linux, check @code{/media/} or @code{/mnt/}.
-
+Create a feature branch
 @item
-Update @code{whisper-dvr-directory} to match your device's mount point:
-
-@lisp
-M-x whisper-dvr-set-directory RET /correct/path RET
-@end lisp
+Make your changes
+@item
+Run tests: @code{make test}
+@item
+Submit a pull request
 @end enumerate
 
-@section No Audio Files Found
-@cindex no audio files
+@node License
+@chapter License
 
-@strong{Error:} @code{No audio files found in ...}
-
-@strong{Solutions:}
-
-@enumerate
-@item
-Verify that the directory contains audio files with supported extensions.
-
-@item
-Check that your DVR stores files in a supported format (MP3, WAV, M4A).
-
-@item
-Add additional extensions if your DVR uses a different format:
-
-@lisp
-(add-to-list 'whisper-dvr-file-extensions "wma")
-@end lisp
-@end enumerate
-
-@section Buffer is Read-Only
-@cindex read-only buffer
-
-@strong{Error:} @code{Current buffer is read-only; cannot insert transcription}
-
-@strong{Solution:}
-
-Switch to a writable buffer before running @code{whisper-dvr}.  If you
-need to make the current buffer writable:
-
-@lisp
-M-x read-only-mode RET
-@end lisp
-
-@section Whisper Transcription Fails
-@cindex transcription failure
-
-If transcription fails after file selection, the issue is likely with
-the whisper.el configuration.  Verify that:
-
-@enumerate
-@item
-whisper.el is properly installed and configured.
-
-@item
-The Whisper backend (whisper.cpp or OpenAI API) is accessible.
-
-@item
-The audio file is not corrupted.
-@end enumerate
-
-Consult the whisper.el documentation for backend-specific troubleshooting.
-
-@node GNU Free Documentation License
-@appendix GNU Free Documentation License
-
-@include fdl.texi
+whisper-dvr is free software: you can redistribute it and/or modify it
+under the terms of the GNU General Public License as published by the
+Free Software Foundation, either version 3 of the License, or (at your
+option) any later version.
 
 @node Index
 @unnumbered Index
