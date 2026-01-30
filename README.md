@@ -1,9 +1,13 @@
 # whisper-dvr
-
+![Version](https://img.shields.io/static/v1?label=whisper-dvr&message=0.1&color=brightcolor)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Emacs](https://img.shields.io/badge/Emacs-27.1+-purple.svg)](https://www.gnu.org/software/emacs/)
 
 Transcribe audio files from digital voice recorders directly in Emacs using [whisper.el](https://github.com/natruj/whisper.el).
+
+## Problem addressed: select mp3 file to be transcribed from menu generated from folder on DVR.
+This package negates the need to change file paths from that for the current file path to that of the audio file when running whisper-file.
+It reduces the friction associated with transcribing multiple audio files daily such as the two associated with morning and evening commutes.
 
 ## Table of Contents
 
@@ -52,6 +56,8 @@ M-x package-install RET whisper-dvr RET
 ```
 
 **Using `use-package`:**
+
+Obviously, we need to customize whisper-dvr-directory to that of your device.
 
 ```elisp
 (use-package whisper-dvr
@@ -500,3 +506,19 @@ This project is licensed under the GNU General Public License v3.0. See the [LIC
 - [whisper.el](https://github.com/natruj/whisper.el) for Whisper integration in Emacs
 - [OpenAI Whisper](https://github.com/openai/whisper) for the transcription model
 - [whisper.cpp](https://github.com/ggerganov/whisper.cpp) for the efficient C++ implementation
+
+## Status
+
+Runs on macOS. Not tested on Windows or Linux.
+
+## Update history
+
+|Version      | Changes                                                                                                                                                                         | Date                 |
+|:-----------|:------------------------------------------------------------------------------------------------------------------------------------------|:--------------------|
+| Version 0.1 |   Added badges, funding, and update table.  Initial commit.                                                                                                                | 1/30/2026  |
+## Sources of funding
+
+- NIH: R01 CA242845
+- NIH: R01 AI088011
+- NIH: P30 CA225520 (PI: R. Mannel)
+- NIH: P20 GM103640 and P30 GM145423 (PI: A. West)
