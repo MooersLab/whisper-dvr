@@ -511,6 +511,9 @@ This project is licensed under the GNU General Public License v3.0. See the [LIC
 
 Runs on macOS. Not tested on Windows or Linux.
 
+Has not been depoisted in MELPA yet.
+I intend to do so soon.
+
 ## Update history
 
 |Version      | Changes                                                                                                                                                                         | Date                 |
