@@ -77,7 +77,7 @@ The current buffer must be writable for this function to proceed."
       (message "Transcribing %s with whisper..." 
                (file-name-nondirectory selected-file))
       ;; Call whisper-file with the selected file
-      (whisper-file selected-file))))
+      (whisper-run selected-file))))
 
 ;;;###autoload
 (defun whisper-dvr-set-directory (dir)
