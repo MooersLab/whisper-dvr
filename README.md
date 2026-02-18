@@ -257,6 +257,25 @@ Review the transcription and make any necessary corrections. Save your file:
 C-x C-s
 ```
 
+#### Step 6: Eject the DVR
+
+This bash function for Mac OS makes it easier. 
+
+```bash
+edvr() {
+  # Move out of /Volumes to avoid "resource busy" errors
+  cd ~
+  
+  # Use diskutil to safely unmount the specific volumes
+  # diskutil unmount "/Volumes/SDK"
+  diskutil unmount "/Volumes/IC RECORDER"
+  
+  echo "Unmounted DVR. Now safe to remove."
+}
+```
+
+
+
 ### Tutorial: Batch Processing Multiple Recordings
 
 For processing multiple recordings efficiently:
