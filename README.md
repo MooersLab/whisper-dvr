@@ -260,6 +260,8 @@ C-x C-s
 #### Step 6: Eject the DVR
 
 This bash function for Mac OS makes it easier. 
+Uncomment the line for the SDK if you supplemented the memory of your DVR with a SDK.
+Edit the "IC RECORDER" to whatever your DVR is called.
 
 ```bash
 edvr() {
