@@ -1,4 +1,4 @@
-<!-- ![Version](https://img.shields.io/static/v1?label=whisper-dvr&message=0.1&color=brightcolor)-->
+![Version](https://img.shields.io/static/v1?label=whisper-dvr&message=0.3&color=brightcolor)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Emacs](https://img.shields.io/badge/Emacs-27.1+-purple.svg)](https://www.gnu.org/software/emacs/)
 
@@ -535,14 +535,17 @@ This project is licensed under the GNU General Public License v3.0. See the [LIC
 
 Runs on macOS. Not tested on Windows or Linux.
 
-Has not been depoisted in MELPA yet.
+Has not been deposited in MELPA yet.
 I intend to do so soon.
 
 ## Update history
 
 |Version      | Changes                                                                                                                                                                         | Date                 |
 |:-----------|:------------------------------------------------------------------------------------------------------------------------------------------|:--------------------|
-| Version 0.1 |   Added badges, funding, and update table.  Initial commit.                                                                                                                | 1/30/2026  |
+| Version 0.1.0 |   Added badges, funding, and update table.  Initial commit.                                                                              | 1/30/2026  |
+| Version 0.2.0 | Added functions to delete selected files or bulk delete old files from DVR's memory.         | 2/??/2026  |
+| Version 0.3.0 | Added function to eject DVR in an operating system-specific manner.      | 2/24/2026 |
+
 ## Sources of funding
 
 - NIH: R01 CA242845
