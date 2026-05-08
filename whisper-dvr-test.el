@@ -250,6 +250,169 @@
       (delete-file temp-file))))
 
 ;;; ============================================================
+;;; Unit Tests: whisper-dvr-clear-all-files
+;;; ============================================================
+
+(ert-deftest whisper-dvr-test-clear-all-files-no-files ()
+  "Test that clear-all-files reports nothing to do when directory is empty."
+  (let ((whisper-dvr-directory "/test/empty")
+        (deleted-files '())
+        (last-message nil))
+    (cl-letf (((symbol-function 'whisper-dvr--list-audio-files)
+               (lambda () nil))
+              ((symbol-function 'whisper-dvr--delete-file-safely)
+               (lambda (f) (push f deleted-files) t))
+              ((symbol-function 'yes-or-no-p)
+               (lambda (&rest _)
+                 (error "Should not prompt for an empty directory")))
+              ((symbol-function 'message)
+               (lambda (fmt &rest args)
+                 (setq last-message (apply #'format fmt args)))))
+      (whisper-dvr-clear-all-files)
+      (should (null deleted-files))
+      (should (string-match-p "No audio files found" last-message)))))
+
+(ert-deftest whisper-dvr-test-clear-all-files-aborts-on-no ()
+  "Test that no files are deleted when the user declines the prompt."
+  (let ((whisper-dvr-directory "/test/dvr")
+        (deleted-files '()))
+    (cl-letf (((symbol-function 'whisper-dvr--list-audio-files)
+               (lambda () '("/test/dvr/a.mp3" "/test/dvr/b.mp3")))
+              ((symbol-function 'whisper-dvr--delete-file-safely)
+               (lambda (f) (push f deleted-files) t))
+              ((symbol-function 'yes-or-no-p) (lambda (&rest _) nil))
+              ((symbol-function 'message) #'ignore))
+      (whisper-dvr-clear-all-files)
+      (should (null deleted-files)))))
+
+(ert-deftest whisper-dvr-test-clear-all-files-deletes-all ()
+  "Test that every listed audio file is processed when confirmed."
+  (let ((whisper-dvr-directory "/test/dvr")
+        (deleted-files '())
+        (mock-files '("/test/dvr/a.mp3" "/test/dvr/b.wav" "/test/dvr/c.m4a")))
+    (cl-letf (((symbol-function 'whisper-dvr--list-audio-files)
+               (lambda () mock-files))
+              ((symbol-function 'whisper-dvr--delete-file-safely)
+               (lambda (f) (push f deleted-files) t))
+              ((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
+              ((symbol-function 'message) #'ignore))
+      (whisper-dvr-clear-all-files)
+      (should (= 3 (length deleted-files)))
+      (should (member "/test/dvr/a.mp3" deleted-files))
+      (should (member "/test/dvr/b.wav" deleted-files))
+      (should (member "/test/dvr/c.m4a" deleted-files)))))
+
+(ert-deftest whisper-dvr-test-clear-all-files-no-confirm-skips-prompt ()
+  "Test that the no-confirm argument skips the yes-or-no-p prompt."
+  (let ((whisper-dvr-directory "/test/dvr")
+        (deleted-files '())
+        (prompted nil))
+    (cl-letf (((symbol-function 'whisper-dvr--list-audio-files)
+               (lambda () '("/test/dvr/a.mp3" "/test/dvr/b.mp3")))
+              ((symbol-function 'whisper-dvr--delete-file-safely)
+               (lambda (f) (push f deleted-files) t))
+              ((symbol-function 'yes-or-no-p)
+               (lambda (&rest _) (setq prompted t) nil))
+              ((symbol-function 'message) #'ignore))
+      (whisper-dvr-clear-all-files t)
+      (should-not prompted)
+      (should (= 2 (length deleted-files))))))
+
+(ert-deftest whisper-dvr-test-clear-all-files-prompt-shows-count ()
+  "Test that the confirmation prompt mentions the file count and directory."
+  (let ((whisper-dvr-directory "/test/dvr")
+        (whisper-dvr-use-trash t)
+        (captured-prompt nil))
+    (cl-letf (((symbol-function 'whisper-dvr--list-audio-files)
+               (lambda () '("/test/dvr/a.mp3"
+                            "/test/dvr/b.mp3"
+                            "/test/dvr/c.mp3"
+                            "/test/dvr/d.mp3")))
+              ((symbol-function 'whisper-dvr--delete-file-safely)
+               (lambda (_f) t))
+              ((symbol-function 'yes-or-no-p)
+               (lambda (prompt) (setq captured-prompt prompt) nil))
+              ((symbol-function 'message) #'ignore))
+      (whisper-dvr-clear-all-files)
+      (should (string-match-p "4 file" captured-prompt))
+      (should (string-match-p "/test/dvr" captured-prompt))
+      (should (string-match-p "Move to trash" captured-prompt)))))
+
+(ert-deftest whisper-dvr-test-clear-all-files-prompt-respects-use-trash ()
+  "Test that the prompt wording reflects `whisper-dvr-use-trash'."
+  (let ((whisper-dvr-directory "/test/dvr")
+        (whisper-dvr-use-trash nil)
+        (captured-prompt nil))
+    (cl-letf (((symbol-function 'whisper-dvr--list-audio-files)
+               (lambda () '("/test/dvr/a.mp3")))
+              ((symbol-function 'whisper-dvr--delete-file-safely)
+               (lambda (_f) t))
+              ((symbol-function 'yes-or-no-p)
+               (lambda (prompt) (setq captured-prompt prompt) nil))
+              ((symbol-function 'message) #'ignore))
+      (whisper-dvr-clear-all-files)
+      (should (string-match-p "Permanently delete" captured-prompt))
+      (should-not (string-match-p "Move to trash" captured-prompt)))))
+
+(ert-deftest whisper-dvr-test-clear-all-files-uses-trash-when-enabled ()
+  "Test that move-file-to-trash is called when whisper-dvr-use-trash is t."
+  (let ((whisper-dvr-directory "/test/dvr")
+        (whisper-dvr-use-trash t)
+        (trash-calls 0)
+        (delete-calls 0))
+    (cl-letf (((symbol-function 'whisper-dvr--list-audio-files)
+               (lambda () '("/test/dvr/a.mp3" "/test/dvr/b.mp3")))
+              ((symbol-function 'move-file-to-trash)
+               (lambda (_f) (setq trash-calls (1+ trash-calls))))
+              ((symbol-function 'delete-file)
+               (lambda (&rest _) (setq delete-calls (1+ delete-calls))))
+              ((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
+              ((symbol-function 'message) #'ignore))
+      (whisper-dvr-clear-all-files)
+      (should (= 2 trash-calls))
+      (should (= 0 delete-calls)))))
+
+(ert-deftest whisper-dvr-test-clear-all-files-uses-delete-when-trash-disabled ()
+  "Test that delete-file is called when whisper-dvr-use-trash is nil."
+  (let ((whisper-dvr-directory "/test/dvr")
+        (whisper-dvr-use-trash nil)
+        (trash-calls 0)
+        (delete-calls 0))
+    (cl-letf (((symbol-function 'whisper-dvr--list-audio-files)
+               (lambda () '("/test/dvr/a.mp3" "/test/dvr/b.mp3")))
+              ((symbol-function 'move-file-to-trash)
+               (lambda (_f) (setq trash-calls (1+ trash-calls))))
+              ((symbol-function 'delete-file)
+               (lambda (&rest _) (setq delete-calls (1+ delete-calls))))
+              ((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
+              ((symbol-function 'message) #'ignore))
+      (whisper-dvr-clear-all-files)
+      (should (= 0 trash-calls))
+      (should (= 2 delete-calls)))))
+
+(ert-deftest whisper-dvr-test-clear-all-files-counts-only-successes ()
+  "Test that the summary message reports only successful removals."
+  (let ((whisper-dvr-directory "/test/dvr")
+        (call-count 0)
+        (last-message nil))
+    (cl-letf (((symbol-function 'whisper-dvr--list-audio-files)
+               (lambda () '("/test/dvr/a.mp3"
+                            "/test/dvr/b.mp3"
+                            "/test/dvr/c.mp3")))
+              ((symbol-function 'whisper-dvr--delete-file-safely)
+               (lambda (_f)
+                 (setq call-count (1+ call-count))
+                 ;; Second call simulates a failure.
+                 (not (= call-count 2))))
+              ((symbol-function 'yes-or-no-p) (lambda (&rest _) t))
+              ((symbol-function 'message)
+               (lambda (fmt &rest args)
+                 (setq last-message (apply #'format fmt args)))))
+      (whisper-dvr-clear-all-files t)
+      (should (= 3 call-count))
+      (should (string-match-p "2 of 3 file" last-message)))))
+
+;;; ============================================================
 ;;; Integration Tests
 ;;; ============================================================
 
