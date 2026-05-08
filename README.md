@@ -1,4 +1,4 @@
-![Version](https://img.shields.io/static/v1?label=whisper-dvr&message=0.3&color=brightcolor)
+![Version](https://img.shields.io/static/v1?label=whisper-dvr&message=0.4&color=brightcolor)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Emacs](https://img.shields.io/badge/Emacs-27.1+-purple.svg)](https://www.gnu.org/software/emacs/)
 
@@ -37,6 +37,7 @@ It reduces the friction associated with transcribing multiple audio files daily 
 - **Seamless integration** with whisper.el for high-quality transcription
 - **Configurable DVR path** supporting different recorder setups and operating systems
 - **Safety checks** preventing accidental overwrites in read-only buffers
+- **Bulk clearing** of every audio file on the DVR in one operation, with trash support
 - **Comprehensive test suite** with unit and integration tests
 
 ## Requirements
@@ -335,6 +336,7 @@ C-x e e e  ;; Run macro multiple times
 |---------|-------------|
 | `whisper-dvr` | List audio files from DVR and transcribe selected file |
 | `whisper-dvr-set-directory` | Interactively change the DVR directory |
+| `whisper-dvr-clear-all-files` | Remove every audio file from the DVR (trash by default) |
 
 ### whisper-dvr
 
@@ -351,6 +353,30 @@ Change the DVR directory interactively:
 ```
 M-x whisper-dvr-set-directory RET /new/path/to/dvr RET
 ```
+
+### whisper-dvr-clear-all-files
+
+Remove every audio file at the top level of `whisper-dvr-directory`
+in one operation. Audio files are identified by the extensions in
+`whisper-dvr-file-extensions`. Subdirectories are not descended
+into, so layouts that nest recordings under `FOLDER01..FOLDER05` keep
+their structure; only the files in the top-level directory are
+cleared.
+
+By default, files are moved to the system trash and can be recovered.
+Set `whisper-dvr-use-trash` to `nil` to delete permanently. With a
+prefix argument, the confirmation prompt is skipped.
+
+```
+;; Move every file to the trash, after confirming the count.
+M-x whisper-dvr-clear-all-files
+
+;; Skip the confirmation prompt (use with care).
+C-u M-x whisper-dvr-clear-all-files
+```
+
+The command always reports the number of files processed when it
+finishes.
 
 ## Testing
 
@@ -431,6 +457,7 @@ F whisper-dvr-test-default-directory
 | Format File Entry | 3 | Display formatting |
 | Set Directory | 2 | Directory configuration |
 | Main Function | 3 | Core functionality |
+| Clear All Files | 9 | Bulk clearing of audio files |
 | Integration | 4 | End-to-end workflows |
 | Edge Cases | 3 | Unusual inputs |
 
@@ -545,6 +572,7 @@ I intend to do so soon.
 | Version 0.1.0 |   Added badges, funding, and update table.  Initial commit.                                                                              | 1/30/2026  |
 | Version 0.2.0 | Added functions to delete selected files or bulk delete old files from DVR's memory.         | 2/??/2026  |
 | Version 0.3.0 | Added function to eject DVR in an operating system-specific manner.      | 2/24/2026 |
+| Version 0.4.0 | Added `whisper-dvr-clear-all-files` for one-step removal of every audio file on the DVR, with trash support and a no-confirm prefix argument. Added nine ERT tests covering the new command. | 5/8/2026 |
 
 ## Sources of funding
 
