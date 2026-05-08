@@ -3,7 +3,7 @@
 ;; Author: Blaine Mooers
 ;; Keywords: multimedia, convenience
 ;; Package-Requires: ((emacs "27.1") (whisper "0.1"))
-;; Version: 0.3.0
+;; Version: 0.4.0
 
 ;;; Commentary:
 ;; This package provides functions to list, transcribe, and manage MP3 files
@@ -336,6 +336,40 @@ Files are moved to trash if `whisper-dvr-use-trash' is non-nil."
                    (if whisper-dvr-use-trash "Move to trash" "Deletion")
                    success-count
                    (length filtered-files)))))))
+
+;;;###autoload
+(defun whisper-dvr-clear-all-files (&optional no-confirm)
+  "Clear all audio files from the DVR.
+Removes every audio file at the top level of `whisper-dvr-directory'.
+Audio files are identified by the extensions in
+`whisper-dvr-file-extensions'. Only files at the top level are
+considered, so subdirectories are not descended into.
+
+Files are moved to trash if `whisper-dvr-use-trash' is non-nil,
+otherwise they are deleted permanently. With prefix argument
+NO-CONFIRM, skip the confirmation prompt."
+  (interactive "P")
+  (let* ((all-files (whisper-dvr--list-audio-files))
+         (file-names (mapcar #'file-name-nondirectory all-files)))
+    (if (null all-files)
+        (message "No audio files found in %s" whisper-dvr-directory)
+      (when (or no-confirm
+                (yes-or-no-p
+                 (format "%s all %d file(s) in %s?\n%s"
+                         (if whisper-dvr-use-trash
+                             "Move to trash"
+                           "Permanently delete")
+                         (length all-files)
+                         whisper-dvr-directory
+                         (mapconcat #'identity file-names "\n"))))
+        (let ((success-count 0))
+          (dolist (file all-files)
+            (when (whisper-dvr--delete-file-safely file)
+              (setq success-count (1+ success-count))))
+          (message "%s complete. %d of %d file(s) processed successfully."
+                   (if whisper-dvr-use-trash "Move to trash" "Deletion")
+                   success-count
+                   (length all-files)))))))
 
 ;;; Volume unmounting / safe eject
 
