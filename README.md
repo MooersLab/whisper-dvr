@@ -5,9 +5,9 @@
 # whisper-dvr
 Transcribe audio files from digital voice recorders directly in Emacs using [whisper.el](https://github.com/natruj/whisper.el).
 
-## Problem addressed: select mp3 file to be transcribed from menu generated from folder on DVR.
-This package negates the need to change file paths from that for the current file path to that of the audio file when running whisper-file.
-It reduces the friction associated with transcribing multiple audio files daily such as the two associated with morning and evening commutes.
+## Problem addressed: select an MP3 file to be transcribed from a menu generated from a folder on the DVR.
+This package eliminates the need to change the file path from the current file path to the audio file's path when running whisper-file.
+It reduces the friction of transcribing multiple audio files daily, such as those for the morning and evening commutes.
 
 <p align="center"><img src="./images/audioFileListing.png" alt="HTML5 Icon" style="width:514px;height:145px;"></p>
 
@@ -61,7 +61,7 @@ M-x package-install RET whisper-dvr RET
 
 **Using `use-package`:**
 
-Obviously, we need to customize whisper-dvr-directory to that of your device.
+Obviously, we need to customize whisper-dvr-directory for your device.
 
 ```elisp
 (use-package whisper-dvr
@@ -248,7 +248,7 @@ recording003.mp3                          3.2M  2024-01-16 09:00
 
 Use completion (TAB, arrow keys, or type to filter) to select your recording, then press RET.
 
-The transcription will be inserted at point after processing completes.
+The transcription will be inserted at the point (Emacs cursor position) after processing completes.
 
 #### Step 5: Review and Edit
 
@@ -260,8 +260,8 @@ C-x C-s
 
 #### Step 6: Eject the DVR
 
-This bash function for Mac OS makes it easier. 
-Uncomment the line for the SDK if you supplemented the memory of your DVR with a SDK.
+This Bash function for macOS makes it easier. 
+Uncomment the line for the SDK if you supplemented the memory of your DVR with an SDK.
 Edit the "IC RECORDER" to whatever your DVR is called.
 
 ```bash
@@ -301,7 +301,7 @@ C-x C-f ~/transcriptions/batch-2024-01.org RET
 <cursor here>
 ```
 
-3. Position cursor under each heading and run `M-x whisper-dvr` for each.
+3. Position the cursor under each heading and run `M-x whisper-dvr` for each.
 
 #### Method 2: Using Keyboard Macros
 
