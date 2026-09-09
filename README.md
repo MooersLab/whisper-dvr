@@ -175,10 +175,9 @@ Set the path to your DVR's recording directory:
 
 ### Recording Location Shortcuts
 
-Sony recorders store recordings in two places, the built-in memory and
-a removable SD card, and the two use different folder layouts. Two
-variables hold those paths so that switching between them takes one
-command instead of a fresh directory prompt:
+Sony recorders store recordings in two places, the built-in memory and a removable SD card.
+The two locations use different folder layouts. 
+Two variables hold those paths so that switching between them takes one command instead of a fresh directory prompt:
 
 ```elisp
 (setq whisper-dvr-sd-card-directory
@@ -187,10 +186,8 @@ command instead of a fresh directory prompt:
       "/Volumes/IC RECORDER/REC_FILE/FOLDER01")
 ```
 
-Adjust the leading component on Linux (`/media/<user>/...`) or on
-Windows (`E:/...`). The SD card volume is also included in
-`whisper-dvr-volume-mount-points`, so `whisper-dvr-eject` unmounts it
-along with the recorder.
+Adjust the leading component on Linux (`/media/<user>/...`) or on Windows (`E:/...`). 
+The SD card volume is also included in `whisper-dvr-volume-mount-points`, so `whisper-dvr-eject` unmounts it along with the recorder.
 
 ### Automatic Transcription Paths
 
