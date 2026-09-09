@@ -25,6 +25,26 @@ This path should point to the folder where your DVR stores recordings."
   :type 'directory
   :group 'whisper-dvr)
 
+(defcustom whisper-dvr-sd-card-directory
+  "/Volumes/MEMORY CARD/private/SONY/REC_FILE/FOLDER01"
+  "Directory path holding the recordings on the removable SD card.
+Sony recorders write to \"private/SONY/REC_FILE/FOLDER01\" on the card.
+The card mounts under /Volumes/ on macOS, under /media/<user>/ on most
+Linux systems, and under a drive letter such as \"E:/\" on Windows, so
+edit the leading component of this path to suit the platform.
+`whisper-dvr-set-directory-to-sd-card' copies this value into
+`whisper-dvr-directory'."
+  :type 'directory
+  :group 'whisper-dvr)
+
+(defcustom whisper-dvr-internal-memory-directory
+  "/Volumes/IC RECORDER/REC_FILE/FOLDER01"
+  "Directory path holding the recordings in the built-in memory.
+This value is the companion of `whisper-dvr-sd-card-directory' and
+supplies the target for `whisper-dvr-set-directory-to-internal-memory'."
+  :type 'directory
+  :group 'whisper-dvr)
+
 (defcustom whisper-dvr-file-extensions '("mp3" "wav" "m4a")
   "List of audio file extensions to include when listing files."
   :type '(repeat string)
@@ -48,7 +68,8 @@ Default is 10MB. Used when filtering files by size."
   :type 'integer
   :group 'whisper-dvr)
 
-(defcustom whisper-dvr-volume-mount-points '("/Volumes/SDK" "/Volumes/IC RECORDER")
+(defcustom whisper-dvr-volume-mount-points
+  '("/Volumes/SDK" "/Volumes/IC RECORDER" "/Volumes/MEMORY CARD")
   "List of mount points (volumes) to unmount when ejecting the DVR.
 On macOS these are paths under /Volumes/.
 On Linux these are mount points such as /media/<user>/<label>.
@@ -172,6 +193,51 @@ The current buffer must be writable for this function to proceed."
   (interactive "DSet DVR directory: ")
   (setq whisper-dvr-directory (expand-file-name dir))
   (message "DVR directory set to: %s" whisper-dvr-directory))
+
+(defun whisper-dvr--set-directory-to (dir label &optional save)
+  "Point `whisper-dvr-directory' at DIR and report the change.
+DIR is expanded before it is stored.  LABEL names the source of the
+recordings in the message that is displayed, for example \"SD card\".
+When SAVE is non-nil, the value is written with `customize-save-variable'
+so that it outlives the current session.  The value is stored even when
+DIR is absent, because the card or the recorder is often still
+unmounted when the location is chosen; the message then reports that
+the volume is not mounted.  Return the expanded path."
+  (let ((path (expand-file-name dir)))
+    (if save
+        (customize-save-variable 'whisper-dvr-directory path)
+      (setq whisper-dvr-directory path))
+    (message "DVR directory reset to the %s: %s%s%s"
+             label
+             path
+             (if save " (saved)" "")
+             (if (file-directory-p path) "" " [volume not mounted]"))
+    path))
+
+;;;###autoload
+(defun whisper-dvr-set-directory-to-sd-card (&optional save)
+  "Reset the DVR directory to the recorder's SD card.
+The path is taken from `whisper-dvr-sd-card-directory'.  With a prefix
+argument, SAVE is non-nil and the value is stored with
+`customize-save-variable' so that the SD card stays the default in later
+sessions.  The value is set even when the card is not mounted, so the
+command can be run before the recorder is plugged in."
+  (interactive "P")
+  (whisper-dvr--set-directory-to whisper-dvr-sd-card-directory
+                                 "SD card"
+                                 save))
+
+;;;###autoload
+(defun whisper-dvr-set-directory-to-internal-memory (&optional save)
+  "Reset the DVR directory to the recorder's built-in memory.
+The path is taken from `whisper-dvr-internal-memory-directory'.  With a
+prefix argument, SAVE is non-nil and the value is stored with
+`customize-save-variable'.  This command is the counterpart of
+`whisper-dvr-set-directory-to-sd-card'."
+  (interactive "P")
+  (whisper-dvr--set-directory-to whisper-dvr-internal-memory-directory
+                                 "internal memory"
+                                 save))
 
 ;;;###autoload
 (defun whisper-dvr-delete-files (&optional no-confirm)

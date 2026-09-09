@@ -171,6 +171,32 @@ If your DVR is mounted at a different location:
 M-x whisper-dvr-set-directory RET /path/to/dvr RET
 @end example
 
+@section Switching Between the SD Card and the Built-in Memory
+@cindex SD card
+@cindex memory card
+@findex whisper-dvr-set-directory-to-sd-card
+@findex whisper-dvr-set-directory-to-internal-memory
+
+Sony recorders keep recordings in two places, the built-in memory and a
+removable SD card, and the two use different folder layouts.  Two
+commands switch between them without a directory prompt:
+
+@example
+M-x whisper-dvr-set-directory-to-sd-card
+M-x whisper-dvr-set-directory-to-internal-memory
+@end example
+
+Each command copies the matching customization variable into
+@code{whisper-dvr-directory}.  A prefix argument saves the value with
+@code{customize-save-variable} so that the choice outlives the session:
+
+@example
+C-u M-x whisper-dvr-set-directory-to-sd-card
+@end example
+
+The directory is set even when the volume is not mounted, so either
+command can be run before the recorder is plugged in.
+
 @section Interactive Commands
 @cindex commands
 
@@ -183,6 +209,17 @@ Default keybinding: @kbd{C-c w d}.
 @item whisper-dvr-set-directory
 @findex whisper-dvr-set-directory
 Interactively set the DVR directory path.
+
+@item whisper-dvr-set-directory-to-sd-card
+@findex whisper-dvr-set-directory-to-sd-card
+Reset the DVR directory to @code{whisper-dvr-sd-card-directory}.
+With a prefix argument, save the value for later sessions.
+
+@item whisper-dvr-set-directory-to-internal-memory
+@findex whisper-dvr-set-directory-to-internal-memory
+Reset the DVR directory to
+@code{whisper-dvr-internal-memory-directory}.
+With a prefix argument, save the value for later sessions.
 @end table
 
 @node Customization
@@ -198,6 +235,33 @@ Default: @code{"/Volumes/IC RECORDER/REC_FILE/FOLDER01"}
 
 @lisp
 (setq whisper-dvr-directory "/your/dvr/path")
+@end lisp
+
+@section whisper-dvr-sd-card-directory
+@vindex whisper-dvr-sd-card-directory
+@cindex customization, SD card
+
+The directory path where the removable SD card stores recordings.
+
+Default: @code{"/Volumes/MEMORY CARD/private/SONY/REC_FILE/FOLDER01"}
+
+@lisp
+(setq whisper-dvr-sd-card-directory
+      "/Volumes/MEMORY CARD/private/SONY/REC_FILE/FOLDER01")
+@end lisp
+
+@section whisper-dvr-internal-memory-directory
+@vindex whisper-dvr-internal-memory-directory
+@cindex customization, internal memory
+
+The directory path where the recorder's built-in memory stores
+recordings.
+
+Default: @code{"/Volumes/IC RECORDER/REC_FILE/FOLDER01"}
+
+@lisp
+(setq whisper-dvr-internal-memory-directory
+      "/Volumes/IC RECORDER/REC_FILE/FOLDER01")
 @end lisp
 
 @section whisper-dvr-file-extensions

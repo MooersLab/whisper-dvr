@@ -173,6 +173,25 @@ Set the path to your DVR's recording directory:
 (setq whisper-dvr-directory "E:/REC_FILE/FOLDER01")
 ```
 
+### Recording Location Shortcuts
+
+Sony recorders store recordings in two places, the built-in memory and
+a removable SD card, and the two use different folder layouts. Two
+variables hold those paths so that switching between them takes one
+command instead of a fresh directory prompt:
+
+```elisp
+(setq whisper-dvr-sd-card-directory
+      "/Volumes/MEMORY CARD/private/SONY/REC_FILE/FOLDER01")
+(setq whisper-dvr-internal-memory-directory
+      "/Volumes/IC RECORDER/REC_FILE/FOLDER01")
+```
+
+Adjust the leading component on Linux (`/media/<user>/...`) or on
+Windows (`E:/...`). The SD card volume is also included in
+`whisper-dvr-volume-mount-points`, so `whisper-dvr-eject` unmounts it
+along with the recorder.
+
 ### Supported File Extensions
 
 By default, whisper-dvr supports MP3, WAV, and M4A files. Add additional formats:
@@ -188,9 +207,15 @@ By default, whisper-dvr supports MP3, WAV, and M4A files. Add additional formats
   :ensure t
   :after whisper
   :bind (("C-c w d" . whisper-dvr)
-         ("C-c w D" . whisper-dvr-set-directory))
+         ("C-c w D" . whisper-dvr-set-directory)
+         ("C-c w s" . whisper-dvr-set-directory-to-sd-card)
+         ("C-c w i" . whisper-dvr-set-directory-to-internal-memory))
   :custom
   (whisper-dvr-directory "/Volumes/IC RECORDER/REC_FILE/FOLDER01")
+  (whisper-dvr-sd-card-directory
+   "/Volumes/MEMORY CARD/private/SONY/REC_FILE/FOLDER01")
+  (whisper-dvr-internal-memory-directory
+   "/Volumes/IC RECORDER/REC_FILE/FOLDER01")
   (whisper-dvr-file-extensions '("mp3" "wav" "m4a")))
 ```
 
@@ -336,6 +361,8 @@ C-x e e e  ;; Run macro multiple times
 |---------|-------------|
 | `whisper-dvr` | List audio files from DVR and transcribe selected file |
 | `whisper-dvr-set-directory` | Interactively change the DVR directory |
+| `whisper-dvr-set-directory-to-sd-card` | Reset the DVR directory to the SD card |
+| `whisper-dvr-set-directory-to-internal-memory` | Reset the DVR directory to the built-in memory |
 | `whisper-dvr-clear-all-files` | Remove every audio file from the DVR (trash by default) |
 
 ### whisper-dvr
@@ -352,6 +379,40 @@ Change the DVR directory interactively:
 
 ```
 M-x whisper-dvr-set-directory RET /new/path/to/dvr RET
+```
+
+### whisper-dvr-set-directory-to-sd-card
+
+Reset `whisper-dvr-directory` to `whisper-dvr-sd-card-directory`, which
+defaults to the Sony SD card layout
+`/Volumes/MEMORY CARD/private/SONY/REC_FILE/FOLDER01`. The command
+avoids retyping a long path every time the recordings move to the card.
+
+```
+;; Point at the SD card for this session only.
+M-x whisper-dvr-set-directory-to-sd-card
+
+;; Point at the SD card and save it as the default.
+C-u M-x whisper-dvr-set-directory-to-sd-card
+```
+
+A prefix argument writes the value with `customize-save-variable`, so
+the SD card remains the default in later sessions. Without the prefix
+argument the change lasts only for the current session, which matches
+the behavior of `whisper-dvr-set-directory`.
+
+The directory is set even when the card is not mounted, so the command
+can be run before the recorder is plugged in. The message then closes
+with `[volume not mounted]` as a reminder.
+
+### whisper-dvr-set-directory-to-internal-memory
+
+The counterpart of the previous command. It resets
+`whisper-dvr-directory` to `whisper-dvr-internal-memory-directory` and
+takes the same prefix argument for saving the value.
+
+```
+M-x whisper-dvr-set-directory-to-internal-memory
 ```
 
 ### whisper-dvr-clear-all-files
@@ -456,6 +517,7 @@ F whisper-dvr-test-default-directory
 | List Audio Files | 4 | File listing and filtering |
 | Format File Entry | 3 | Display formatting |
 | Set Directory | 2 | Directory configuration |
+| Location Shortcuts | 9 | SD card and internal memory shortcuts |
 | Main Function | 3 | Core functionality |
 | Clear All Files | 9 | Bulk clearing of audio files |
 | Integration | 4 | End-to-end workflows |
