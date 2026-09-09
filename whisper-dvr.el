@@ -5,7 +5,7 @@
 ;; URL: https://github.com/MooersLab/whisper-dvr
 ;; Keywords: multimedia, convenience
 ;; Package-Requires: ((emacs "27.1") (whisper "0.1"))
-;; Version: 0.4.0
+;; Version: 0.5.0
 
 ;;; Commentary:
 ;; This package provides functions to list, transcribe, and manage MP3 files

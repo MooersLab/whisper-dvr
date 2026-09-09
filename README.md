@@ -1,4 +1,4 @@
-![Version](https://img.shields.io/static/v1?label=whisper-dvr&message=0.4&color=brightcolor)
+![Version](https://img.shields.io/static/v1?label=whisper-dvr&message=0.5&color=brightcolor)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Emacs](https://img.shields.io/badge/Emacs-27.1+-purple.svg)](https://www.gnu.org/software/emacs/)
 
@@ -665,6 +665,7 @@ I intend to do so soon.
 | Version 0.2.0 | Added functions to delete selected files or bulk delete old files from DVR's memory.         | 2/??/2026  |
 | Version 0.3.0 | Added function to eject DVR in an operating system-specific manner.      | 2/24/2026 |
 | Version 0.4.0 | Added `whisper-dvr-clear-all-files` for one-step removal of every audio file on the DVR, with trash support and a no-confirm prefix argument. Added nine ERT tests covering the new command. | 5/8/2026 |
+| Version 0.5.0 | Added `whisper-dvr-set-directory-to-sd-card` and `whisper-dvr-set-directory-to-internal-memory`, which switch the recording location without retyping a path, plus a prefix argument that saves the choice. Defined four functions and four variables that were called but never defined, so background monitoring, automatic transcription, and mobile sync no longer fail with a void-function error. Fixed the `let` that needed to be `let*` in `whisper-dvr-list-remote-devices`, the duplicate Dropbox token prompt, and the discarded reason in the failure notification. `make compile` and `checkdoc` now run clean, and the suite grew from 31 tests to 50. | 9/9/2026 |
 
 ## Sources of funding
 

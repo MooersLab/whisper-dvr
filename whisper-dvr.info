@@ -1,9 +1,9 @@
 This is whisper-dvr.info, produced by makeinfo version 7.1 from
 whisper-dvr.texi.
 
-This manual is for whisper-dvr (version 0.2.0).
+This manual is for whisper-dvr (version 0.5.0).
 
-   Copyright © 2024-2025 Blaine Mooers.
+   Copyright © 2024-2026 Blaine Mooers.
 
      Permission is granted to copy, distribute and/or modify this
      document under the terms of the GNU Free Documentation License,
@@ -24,9 +24,9 @@ whisper-dvr
 whisper-dvr is an Emacs package that provides a convenient interface for
 transcribing audio files from a digital voice recorder using whisper.el.
 
-   This manual is for whisper-dvr (version 0.2.0).
+   This manual is for whisper-dvr (version 0.5.0).
 
-   Copyright © 2024-2025 Blaine Mooers.
+   Copyright © 2024-2026 Blaine Mooers.
 
      Permission is granted to copy, distribute and/or modify this
      document under the terms of the GNU Free Documentation License,
