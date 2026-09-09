@@ -3,7 +3,11 @@
 [![Emacs](https://img.shields.io/badge/Emacs-27.1+-purple.svg)](https://www.gnu.org/software/emacs/)
 
 # whisper-dvr
-Transcribe audio files from digital voice recorders directly in Emacs using [whisper.el](https://github.com/natruj/whisper.el).
+Transcribe audio files from digital voice recorders (DVR) directly in Emacs using [whisper.el](https://github.com/natruj/whisper.el).
+I use this Elisp package twice a day after each commute.
+I use this package with a Sony IC Recorder (https://rd1.sony.net/help/icd/u57/h_uc/), which I purchased for $80 in January 2024.
+This electronic device has had a high return on investment.
+I have used it for about 1000 hours.
 
 ## Problem addressed: select an MP3 file to be transcribed from a menu generated from a folder on the DVR.
 This package eliminates the need to change the file path from the current file path to the audio file's path when running whisper-file.
