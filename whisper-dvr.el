@@ -1,6 +1,8 @@
 ;;; whisper-dvr.el --- Transcribe MP3 files from DVR with whisper.el -*- lexical-binding: t; -*-
 
-;; Author: Blaine Mooers
+;; Author: Blaine Mooers <blaine-mooers@ou.edu>
+;; Maintainer: Blaine Mooers <blaine-mooers@ou.edu>
+;; URL: https://github.com/MooersLab/whisper-dvr
 ;; Keywords: multimedia, convenience
 ;; Package-Requires: ((emacs "27.1") (whisper "0.1"))
 ;; Version: 0.4.0
@@ -112,8 +114,8 @@ Files are filtered by extensions in `whisper-dvr-file-extensions'."
   (let ((dir (expand-file-name whisper-dvr-directory)))
     (unless (file-directory-p dir)
       (user-error "DVR directory does not exist: %s" dir))
-    (let ((pattern (concat "\\." 
-                           (regexp-opt whisper-dvr-file-extensions) 
+    (let ((pattern (concat "\\."
+                           (regexp-opt whisper-dvr-file-extensions)
                            "\\'")))
       (directory-files dir t pattern))))
 
@@ -122,7 +124,7 @@ Files are filtered by extensions in `whisper-dvr-file-extensions'."
 Shows filename, size, and modification time."
   (let* ((attrs (file-attributes filepath))
          (size (file-size-human-readable (file-attribute-size attrs)))
-         (mtime (format-time-string "%Y-%m-%d %H:%M" 
+         (mtime (format-time-string "%Y-%m-%d %H:%M"
                                     (file-attribute-modification-time attrs)))
          (name (file-name-nondirectory filepath)))
     (format "%-40s  %8s  %s" name size mtime)))
@@ -160,7 +162,7 @@ Returns a list of file paths."
 Dates should be time values as returned by `encode-time'."
   (cl-remove-if-not
    (lambda (file)
-     (let ((mtime (file-attribute-modification-time 
+     (let ((mtime (file-attribute-modification-time
                    (file-attributes file))))
        (and (time-less-p start-date mtime)
             (time-less-p mtime end-date))))
@@ -175,7 +177,7 @@ Displays appropriate message on success or error."
         (if whisper-dvr-use-trash
             (move-file-to-trash file)
           (delete-file file))
-        (message "%s: %s" 
+        (message "%s: %s"
                  (if whisper-dvr-use-trash "Moved to trash" "Deleted")
                  (file-name-nondirectory file))
         t)
@@ -206,12 +208,12 @@ The current buffer must be writable for this function to proceed."
     (unless files
       (user-error "No audio files found in %s" whisper-dvr-directory))
     ;; Present selection with completion
-    (let* ((selection (completing-read 
+    (let* ((selection (completing-read
                        (format "Select audio file (%d available): " (length files))
                        file-alist
                        nil t))
            (selected-file (cdr (assoc selection file-alist))))
-      (message "Transcribing %s with whisper..." 
+      (message "Transcribing %s with whisper..."
                (file-name-nondirectory selected-file))
       ;; Call whisper-file with the selected file
       (whisper-run selected-file))))
@@ -288,7 +290,7 @@ prefix argument, SAVE is non-nil and the value is stored with
 ;;;###autoload
 (defun whisper-dvr-delete-files (&optional no-confirm)
   "Select and delete audio files from the DVR.
-Allows multiple file selection using completing-read-multiple.
+Several files can be chosen at once through `completing-read-multiple'.
 With prefix argument NO-CONFIRM, skip the confirmation prompt.
 Prompts for confirmation before deletion unless NO-CONFIRM is non-nil."
   (interactive "P")
@@ -313,12 +315,12 @@ Prompts for confirmation before deletion unless NO-CONFIRM is non-nil."
                                 selected-files)))
         (when (or no-confirm
                   (yes-or-no-p
-                   (format "%s %d file(s)? %s"
-                           (if whisper-dvr-use-trash 
-                               "Move to trash" 
-                               "Permanently delete")
-                           (length selected-files)
-                           (mapconcat #'identity selected-files ", "))))
+                   (format "%s\n%s %d file(s)?"
+                           (mapconcat #'identity selected-files ", ")
+                           (if whisper-dvr-use-trash
+                               "Move to trash"
+                             "Permanently delete")
+                           (length selected-files))))
           (let ((success-count 0))
             (dolist (file full-paths)
               (when (whisper-dvr--delete-file-safely file)
@@ -334,9 +336,9 @@ Prompts for confirmation before deletion unless NO-CONFIRM is non-nil."
 Interactively prompts for the number of days.
 With prefix argument NO-CONFIRM, skip the confirmation prompt.
 Files are moved to trash if `whisper-dvr-use-trash' is non-nil."
-  (interactive 
-   (list (read-number 
-          (format "Delete files older than how many days? (default %d): " 
+  (interactive
+   (list (read-number
+          (format "Delete files older than how many days? (default %d): "
                   whisper-dvr-old-files-threshold)
           whisper-dvr-old-files-threshold)
          current-prefix-arg))
@@ -347,13 +349,13 @@ Files are moved to trash if `whisper-dvr-use-trash' is non-nil."
         (message "No files older than %d days found" days)
       (when (or no-confirm
                 (yes-or-no-p
-                 (format "%s %d file(s) older than %d days?\n%s"
-                         (if whisper-dvr-use-trash 
-                             "Move to trash" 
-                             "Permanently delete")
+                 (format "%s\n%s %d file(s) older than %d days?"
+                         (mapconcat #'identity old-file-names "\n")
+                         (if whisper-dvr-use-trash
+                             "Move to trash"
+                           "Permanently delete")
                          (length old-files)
-                         days
-                         (mapconcat #'identity old-file-names "\n"))))
+                         days)))
         (let ((success-count 0))
           (dolist (file old-files)
             (when (whisper-dvr--delete-file-safely file)
@@ -375,26 +377,26 @@ Files are moved to trash if `whisper-dvr-use-trash' is non-nil."
          current-prefix-arg))
   (let* ((all-files (whisper-dvr--list-audio-files))
          (large-files (whisper-dvr--filter-files-by-size all-files min-size))
-         (large-file-info (mapcar 
+         (large-file-info (mapcar
                            (lambda (f)
                              (format "%s (%s)"
                                      (file-name-nondirectory f)
-                                     (file-size-human-readable 
-                                      (file-attribute-size 
+                                     (file-size-human-readable
+                                      (file-attribute-size
                                        (file-attributes f)))))
                            large-files)))
     (if (null large-files)
-        (message "No files larger than %s found" 
+        (message "No files larger than %s found"
                  (file-size-human-readable min-size))
       (when (or no-confirm
                 (yes-or-no-p
-                 (format "%s %d file(s) larger than %s?\n%s"
-                         (if whisper-dvr-use-trash 
-                             "Move to trash" 
-                             "Permanently delete")
+                 (format "%s\n%s %d file(s) larger than %s?"
+                         (mapconcat #'identity large-file-info "\n")
+                         (if whisper-dvr-use-trash
+                             "Move to trash"
+                           "Permanently delete")
                          (length large-files)
-                         (file-size-human-readable min-size)
-                         (mapconcat #'identity large-file-info "\n"))))
+                         (file-size-human-readable min-size))))
         (let ((success-count 0))
           (dolist (file large-files)
             (when (whisper-dvr--delete-file-safely file)
@@ -415,15 +417,15 @@ Files are moved to trash if `whisper-dvr-use-trash' is non-nil."
          (org-read-date nil t nil "End date (YYYY-MM-DD): ")
          current-prefix-arg))
   (let* ((all-files (whisper-dvr--list-audio-files))
-         (filtered-files (whisper-dvr--filter-files-by-date-range 
+         (filtered-files (whisper-dvr--filter-files-by-date-range
                           all-files start-date end-date))
-         (file-info (mapcar 
+         (file-info (mapcar
                      (lambda (f)
                        (format "%s (%s)"
                                (file-name-nondirectory f)
-                               (format-time-string 
+                               (format-time-string
                                 "%Y-%m-%d"
-                                (file-attribute-modification-time 
+                                (file-attribute-modification-time
                                  (file-attributes f)))))
                      filtered-files)))
     (if (null filtered-files)
@@ -432,14 +434,14 @@ Files are moved to trash if `whisper-dvr-use-trash' is non-nil."
                  (format-time-string "%Y-%m-%d" end-date))
       (when (or no-confirm
                 (yes-or-no-p
-                 (format "%s %d file(s) from %s to %s?\n%s"
-                         (if whisper-dvr-use-trash 
-                             "Move to trash" 
-                             "Permanently delete")
+                 (format "%s\n%s %d file(s) from %s to %s?"
+                         (mapconcat #'identity file-info "\n")
+                         (if whisper-dvr-use-trash
+                             "Move to trash"
+                           "Permanently delete")
                          (length filtered-files)
                          (format-time-string "%Y-%m-%d" start-date)
-                         (format-time-string "%Y-%m-%d" end-date)
-                         (mapconcat #'identity file-info "\n"))))
+                         (format-time-string "%Y-%m-%d" end-date))))
         (let ((success-count 0))
           (dolist (file filtered-files)
             (when (whisper-dvr--delete-file-safely file)
@@ -467,13 +469,13 @@ NO-CONFIRM, skip the confirmation prompt."
         (message "No audio files found in %s" whisper-dvr-directory)
       (when (or no-confirm
                 (yes-or-no-p
-                 (format "%s all %d file(s) in %s?\n%s"
+                 (format "%s\n%s all %d file(s) in %s?"
+                         (mapconcat #'identity file-names "\n")
                          (if whisper-dvr-use-trash
                              "Move to trash"
                            "Permanently delete")
                          (length all-files)
-                         whisper-dvr-directory
-                         (mapconcat #'identity file-names "\n"))))
+                         whisper-dvr-directory)))
         (let ((success-count 0))
           (dolist (file all-files)
             (when (whisper-dvr--delete-file-safely file)
@@ -616,8 +618,8 @@ This function should be called from a Dired buffer."
       (when (or no-confirm
                 (yes-or-no-p
                  (format "%s %d marked file(s)?"
-                         (if whisper-dvr-use-trash 
-                             "Move to trash" 
+                         (if whisper-dvr-use-trash
+                             "Move to trash"
                              "Permanently delete")
                          (length marked-files))))
         (let ((success-count 0))
@@ -996,12 +998,12 @@ in `whisper-dvr--mount-cache'."
     (nreverse devices)))
 
 (defun whisper-dvr--poll-devices ()
-  "Poll for device changes and trigger appropriate hooks."
+  "Poll for device arrivals and departures, then run the matching hooks."
   (when whisper-dvr-enable-background-monitoring
     (let ((current-devices (whisper-dvr--detect-connected-devices))
           (previous-keys (hash-table-keys whisper-dvr--connected-devices))
           (current-keys '()))
-    
+
       ;; Check for newly connected devices
       (dolist (device current-devices)
         (let ((key (plist-get device :directory)))
@@ -1010,7 +1012,7 @@ in `whisper-dvr--mount-cache'."
             ;; New device detected
             (puthash key device whisper-dvr--connected-devices)
             (whisper-dvr--handle-device-connect device))))
-    
+
       ;; Check for disconnected devices
       (dolist (key previous-keys)
         (unless (member key current-keys)
@@ -1027,7 +1029,7 @@ in `whisper-dvr--mount-cache'."
                         (format "Device '%s' is now available" name)
                         'normal)
     (run-hook-with-args 'whisper-dvr-device-connect-hook device)
-  
+
     ;; Trigger auto-transcription if enabled
     (when whisper-dvr-auto-transcribe-on-connect
       (run-with-timer whisper-dvr-auto-transcribe-delay nil
@@ -1041,7 +1043,7 @@ in `whisper-dvr--mount-cache'."
                         (format "Device '%s' was removed" name)
                         'normal)
     (run-hook-with-args 'whisper-dvr-device-disconnect-hook device)
-  
+
     ;; Invalidate cache
     (whisper-dvr--invalidate-cache-entry (plist-get device :directory))))
 
@@ -1168,7 +1170,7 @@ Filters based on `whisper-dvr-auto-transcribe-filter'."
          (message "Failed to transcribe %s: %s"
                  (file-name-nondirectory file)
                  (error-message-string err)))))
-  
+
     ;; Final notification
     (whisper-dvr--notify
      "Auto-Transcription Complete"
@@ -1176,7 +1178,7 @@ Filters based on `whisper-dvr-auto-transcribe-filter'."
              (or (plist-get device :volume-name) "DVR")
              completed failed)
      (if (zerop failed) 'normal 'critical))
-  
+
     ;; Save history
     (whisper-dvr-save-cache)))
 
@@ -1221,12 +1223,12 @@ Returns connection info plist or nil on failure."
       (let* ((name (plist-get remote-config :name))
              (tramp-path (whisper-dvr--build-tramp-path remote-config))
              (identity-file (plist-get remote-config :identity-file)))
-      
+
         ;; Set TRAMP identity file if provided
         (when identity-file
           (add-to-list 'tramp-ssh-controlmaster-options
                       (format "-i %s" identity-file)))
-      
+
         ;; Test connection
         (if (file-accessible-directory-p tramp-path)
             (progn
@@ -1415,7 +1417,7 @@ Placeholder - requires OAuth2 implementation."
 (defun whisper-dvr--icloud-client ()
   "Create iCloud API client.
 Placeholder - requires iCloud authentication."
-  (error "iCloud integration not yet implemented"))
+  (error "Integration with iCloud is not yet implemented"))
 
 (defun whisper-dvr-sync-mobile ()
   "Synchronize with mobile DVR app via cloud service."
@@ -1428,7 +1430,7 @@ Placeholder - requires iCloud authentication."
          (list-fn (plist-get client :list-files))
          (download-fn (plist-get client :download))
          (files (funcall list-fn whisper-dvr-mobile-sync-folder)))
-  
+
     (if (null files)
         (message "No new files in mobile sync folder")
       (message "Found %d file(s) in mobile sync folder" (length files))
@@ -1573,7 +1575,7 @@ AUDIO-FILE is the source recording, TRANSCRIPT-FILE is the output."
            (cache-loaded . "Cache loaded (%d entries)")
            (monitoring-started . "Background monitoring started")
            (monitoring-stopped . "Background monitoring stopped")))
-  
+
     (es . ((device-connected . "Dispositivo DVR conectado: %s")
            (device-disconnected . "Dispositivo DVR desconectado: %s")
            (ejection-success . "Dispositivo DVR expulsado correctamente: %s")
@@ -1585,7 +1587,7 @@ AUDIO-FILE is the source recording, TRANSCRIPT-FILE is the output."
            (cache-loaded . "Caché cargada (%d entradas)")
            (monitoring-started . "Monitoreo en segundo plano iniciado")
            (monitoring-stopped . "Monitoreo en segundo plano detenido")))
-  
+
     (fr . ((device-connected . "Périphérique DVR connecté: %s")
            (device-disconnected . "Périphérique DVR déconnecté: %s")
            (ejection-success . "Périphérique DVR éjecté avec succès: %s")
@@ -1597,7 +1599,7 @@ AUDIO-FILE is the source recording, TRANSCRIPT-FILE is the output."
            (cache-loaded . "Cache chargé (%d entrées)")
            (monitoring-started . "Surveillance en arrière-plan démarrée")
            (monitoring-stopped . "Surveillance en arrière-plan arrêtée")))
-  
+
     (de . ((device-connected . "DVR-Gerät verbunden: %s")
            (device-disconnected . "DVR-Gerät getrennt: %s")
            (ejection-success . "DVR-Gerät erfolgreich ausgeworfen: %s")
@@ -1609,7 +1611,7 @@ AUDIO-FILE is the source recording, TRANSCRIPT-FILE is the output."
            (cache-loaded . "Cache geladen (%d Einträge)")
            (monitoring-started . "Hintergrundüberwachung gestartet")
            (monitoring-stopped . "Hintergrundüberwachung gestoppt")))
-  
+
     (ja . ((device-connected . "DVRデバイスが接続されました: %s")
            (device-disconnected . "DVRデバイスが切断されました: %s")
            (ejection-success . "DVRデバイスの取り出しに成功しました: %s")
@@ -1621,7 +1623,7 @@ AUDIO-FILE is the source recording, TRANSCRIPT-FILE is the output."
            (cache-loaded . "キャッシュを読み込みました(%dエントリ)")
            (monitoring-started . "バックグラウンド監視を開始しました")
            (monitoring-stopped . "バックグラウンド監視を停止しました")))
-  
+
     (zh . ((device-connected . "DVR设备已连接: %s")
            (device-disconnected . "DVR设备已断开: %s")
            (ejection-success . "成功弹出DVR设备: %s")
@@ -1633,7 +1635,7 @@ AUDIO-FILE is the source recording, TRANSCRIPT-FILE is the output."
            (cache-loaded . "缓存已加载(%d条目)")
            (monitoring-started . "后台监控已启动")
            (monitoring-stopped . "后台监控已停止")))
-  
+
     (ko . ((device-connected . "DVR 장치가 연결되었습니다: %s")
            (device-disconnected . "DVR 장치가 연결 해제되었습니다: %s")
            (ejection-success . "DVR 장치를 성공적으로 꺼냈습니다: %s")
