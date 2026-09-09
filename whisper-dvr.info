@@ -175,6 +175,11 @@ command can be run before the recorder is plugged in.
      Reset the DVR directory to ‘whisper-dvr-internal-memory-directory’.
      With a prefix argument, save the value for later sessions.
 
+‘whisper-dvr-transcribe-file’
+     Transcribe one audio file without the selection menu.  This is the
+     entry point used by batch transcription and by the automatic device
+     handlers.
+
 
 File: whisper-dvr.info,  Node: Customization,  Next: Troubleshooting,  Prev: Usage,  Up: Top
 
@@ -321,6 +326,7 @@ Function Index
 * whisper-dvr-set-directory-to-internal-memory <1>: Usage.     (line 60)
 * whisper-dvr-set-directory-to-sd-card:  Usage.                (line 29)
 * whisper-dvr-set-directory-to-sd-card <1>: Usage.             (line 56)
+* whisper-dvr-transcribe-file:           Usage.                (line 64)
 
 Variable Index
 ==============
@@ -341,11 +347,11 @@ Node: Introduction1696
 Node: Installation2461
 Node: Configuration3108
 Node: Usage3453
-Node: Customization5488
-Node: Troubleshooting6712
-Node: Contributing7661
-Node: License7964
-Node: Index8312
+Node: Customization5683
+Node: Troubleshooting6907
+Node: Contributing7856
+Node: License8159
+Node: Index8507
 
 End Tag Table
 

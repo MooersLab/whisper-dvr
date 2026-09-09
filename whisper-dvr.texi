@@ -220,6 +220,12 @@ With a prefix argument, save the value for later sessions.
 Reset the DVR directory to
 @code{whisper-dvr-internal-memory-directory}.
 With a prefix argument, save the value for later sessions.
+
+@item whisper-dvr-transcribe-file
+@findex whisper-dvr-transcribe-file
+Transcribe one audio file without the selection menu.  This is the
+entry point used by batch transcription and by the automatic device
+handlers.
 @end table
 
 @node Customization

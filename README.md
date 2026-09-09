@@ -192,6 +192,18 @@ Windows (`E:/...`). The SD card volume is also included in
 `whisper-dvr-volume-mount-points`, so `whisper-dvr-eject` unmounts it
 along with the recorder.
 
+### Automatic Transcription Paths
+
+Two further variables serve the automatic and remote paths:
+
+```elisp
+;; Regexp used when automatic transcription collects recordings.
+(setq whisper-dvr-recording-regexp "\\.\\(?:mp3\\|wav\\|m4a\\|flac\\|ogg\\)\\'")
+
+;; Local landing folder for files pulled from a phone or a cloud provider.
+(setq whisper-dvr-base-directory "~/.emacs.d/whisper-dvr")
+```
+
 ### Supported File Extensions
 
 By default, whisper-dvr supports MP3, WAV, and M4A files. Add additional formats:
@@ -363,6 +375,7 @@ C-x e e e  ;; Run macro multiple times
 | `whisper-dvr-set-directory` | Interactively change the DVR directory |
 | `whisper-dvr-set-directory-to-sd-card` | Reset the DVR directory to the SD card |
 | `whisper-dvr-set-directory-to-internal-memory` | Reset the DVR directory to the built-in memory |
+| `whisper-dvr-transcribe-file` | Transcribe one audio file without the selection menu |
 | `whisper-dvr-clear-all-files` | Remove every audio file from the DVR (trash by default) |
 
 ### whisper-dvr
@@ -414,6 +427,21 @@ takes the same prefix argument for saving the value.
 ```
 M-x whisper-dvr-set-directory-to-internal-memory
 ```
+
+### whisper-dvr-transcribe-file
+
+Transcribe one audio file without going through the selection menu.
+This is the entry point that batch transcription and the automatic
+device handlers call, and it is useful on its own when the path is
+already known.
+
+```
+M-x whisper-dvr-transcribe-file RET /path/to/recording.mp3 RET
+```
+
+After `whisper-run` returns, the command runs
+`whisper-dvr-transcribe-complete-hook` with the audio path and the
+expected transcript path.
 
 ### whisper-dvr-clear-all-files
 
@@ -518,6 +546,8 @@ F whisper-dvr-test-default-directory
 | Format File Entry | 3 | Display formatting |
 | Set Directory | 2 | Directory configuration |
 | Location Shortcuts | 9 | SD card and internal memory shortcuts |
+| Device Detection | 8 | Volume names, mount cache, and notifications |
+| Transcribe File | 2 | Single-file transcription entry point |
 | Main Function | 3 | Core functionality |
 | Clear All Files | 9 | Bulk clearing of audio files |
 | Integration | 4 | End-to-end workflows |
