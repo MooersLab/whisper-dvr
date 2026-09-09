@@ -164,6 +164,193 @@
     (should-not (string-prefix-p "~" whisper-dvr-directory))))
 
 ;;; ============================================================
+;;; Unit Tests: SD card and internal memory shortcuts
+;;; ============================================================
+
+(ert-deftest whisper-dvr-test-sd-card-directory-default ()
+  "Test that the SD card default names the Sony folder layout."
+  (should (stringp whisper-dvr-sd-card-directory))
+  (should (string-match-p "MEMORY CARD" whisper-dvr-sd-card-directory))
+  (should (string-match-p "private/SONY/REC_FILE/FOLDER01"
+                          whisper-dvr-sd-card-directory)))
+
+(ert-deftest whisper-dvr-test-internal-memory-directory-default ()
+  "Test that the internal memory default names the recorder folder."
+  (should (stringp whisper-dvr-internal-memory-directory))
+  (should (string-match-p "FOLDER01" whisper-dvr-internal-memory-directory)))
+
+(ert-deftest whisper-dvr-test-sd-card-shortcut-sets-directory ()
+  "Test that the SD card command copies the SD card path."
+  (let ((whisper-dvr-directory "/original/path")
+        (whisper-dvr-sd-card-directory "/Volumes/CARD/REC"))
+    (cl-letf (((symbol-function 'message) #'ignore))
+      (whisper-dvr-set-directory-to-sd-card))
+    (should (string= (expand-file-name "/Volumes/CARD/REC")
+                     whisper-dvr-directory))))
+
+(ert-deftest whisper-dvr-test-internal-memory-shortcut-sets-directory ()
+  "Test that the internal memory command copies the recorder path."
+  (let ((whisper-dvr-directory "/original/path")
+        (whisper-dvr-internal-memory-directory "/Volumes/IC/REC"))
+    (cl-letf (((symbol-function 'message) #'ignore))
+      (whisper-dvr-set-directory-to-internal-memory))
+    (should (string= (expand-file-name "/Volumes/IC/REC")
+                     whisper-dvr-directory))))
+
+(ert-deftest whisper-dvr-test-sd-card-shortcut-expands-path ()
+  "Test that the SD card command expands a path that starts with a tilde."
+  (let ((whisper-dvr-directory "/original")
+        (whisper-dvr-sd-card-directory "~/card/REC"))
+    (cl-letf (((symbol-function 'message) #'ignore))
+      (whisper-dvr-set-directory-to-sd-card))
+    (should-not (string-prefix-p "~" whisper-dvr-directory))))
+
+(ert-deftest whisper-dvr-test-sd-card-shortcut-without-prefix-does-not-save ()
+  "Test that the plain command leaves the saved value untouched."
+  (let ((whisper-dvr-directory "/original")
+        (whisper-dvr-sd-card-directory "/Volumes/CARD/REC")
+        (saved nil))
+    (cl-letf (((symbol-function 'message) #'ignore)
+              ((symbol-function 'customize-save-variable)
+               (lambda (&rest _args) (setq saved t))))
+      (whisper-dvr-set-directory-to-sd-card))
+    (should-not saved)
+    (should (string= (expand-file-name "/Volumes/CARD/REC")
+                     whisper-dvr-directory))))
+
+(ert-deftest whisper-dvr-test-sd-card-shortcut-with-prefix-saves ()
+  "Test that a prefix argument routes the value through customize."
+  (let ((whisper-dvr-directory "/original")
+        (whisper-dvr-sd-card-directory "/Volumes/CARD/REC")
+        (saved nil))
+    (cl-letf (((symbol-function 'message) #'ignore)
+              ((symbol-function 'customize-save-variable)
+               (lambda (symbol value)
+                 (setq saved (cons symbol value))
+                 (set symbol value))))
+      (whisper-dvr-set-directory-to-sd-card t))
+    (should (eq (car saved) 'whisper-dvr-directory))
+    (should (string= (cdr saved) (expand-file-name "/Volumes/CARD/REC")))))
+
+(ert-deftest whisper-dvr-test-set-directory-to-reports-unmounted-volume ()
+  "Test that an absent directory is reported as an unmounted volume."
+  (let ((whisper-dvr-directory "/original")
+        (reported ""))
+    (cl-letf (((symbol-function 'message)
+               (lambda (fmt &rest args)
+                 (setq reported (apply #'format fmt args)))))
+      (whisper-dvr--set-directory-to "/Volumes/absent/REC" "SD card"))
+    (should (string-match-p "not mounted" reported))))
+
+(ert-deftest whisper-dvr-test-set-directory-to-returns-expanded-path ()
+  "Test that the helper returns the expanded path it stored."
+  (let ((whisper-dvr-directory "/original"))
+    (cl-letf (((symbol-function 'message) #'ignore))
+      (should (string= (whisper-dvr--set-directory-to "~/card" "SD card")
+                       (expand-file-name "~/card"))))))
+
+;;; ============================================================
+;;; Unit Tests: device detection and notification helpers
+;;; ============================================================
+
+(ert-deftest whisper-dvr-test-volume-name-from-volumes-path ()
+  "Test that a /Volumes path yields the volume label."
+  (should (string= (whisper-dvr--volume-name
+                    "/Volumes/MEMORY CARD/private/SONY/REC_FILE/FOLDER01")
+                   "MEMORY CARD")))
+
+(ert-deftest whisper-dvr-test-volume-name-from-plain-path ()
+  "Test that a path outside /Volumes yields its last component."
+  (should (string= (whisper-dvr--volume-name "/media/blaine/IC_RECORDER")
+                   "IC_RECORDER")))
+
+(ert-deftest whisper-dvr-test-invalidate-cache-entry-removes-key ()
+  "Test that invalidating an entry drops it from the mount cache."
+  (let ((whisper-dvr--mount-cache (make-hash-table :test 'equal)))
+    (puthash "/Volumes/CARD" '(:directory "/Volumes/CARD")
+             whisper-dvr--mount-cache)
+    (whisper-dvr--invalidate-cache-entry "/Volumes/CARD")
+    (should-not (gethash "/Volumes/CARD" whisper-dvr--mount-cache))))
+
+(ert-deftest whisper-dvr-test-invalidate-cache-entry-tolerates-nil ()
+  "Test that invalidating a nil directory is harmless."
+  (let ((whisper-dvr--mount-cache (make-hash-table :test 'equal)))
+    (should-not (whisper-dvr--invalidate-cache-entry nil))))
+
+(ert-deftest whisper-dvr-test-detect-connected-devices-skips-absent-paths ()
+  "Test that unmounted candidates are left out of the device list."
+  (let ((whisper-dvr--mount-cache (make-hash-table :test 'equal))
+        (whisper-dvr-directory "/nonexistent/dvr")
+        (whisper-dvr-sd-card-directory "/nonexistent/card")
+        (whisper-dvr-internal-memory-directory "/nonexistent/internal")
+        (whisper-dvr-volume-mount-points '("/nonexistent/volume")))
+    (should (null (whisper-dvr--detect-connected-devices)))))
+
+(ert-deftest whisper-dvr-test-detect-connected-devices-reports-mounted-path ()
+  "Test that a real directory is reported and cached."
+  (let ((temp-dir (make-temp-file "whisper-dvr-test" t)))
+    (unwind-protect
+        (let ((whisper-dvr--mount-cache (make-hash-table :test 'equal))
+              (whisper-dvr-directory temp-dir)
+              (whisper-dvr-sd-card-directory "/nonexistent/card")
+              (whisper-dvr-internal-memory-directory "/nonexistent/internal")
+              (whisper-dvr-volume-mount-points '("/nonexistent/volume")))
+          (let ((devices (whisper-dvr--detect-connected-devices)))
+            (should (= 1 (length devices)))
+            (should (string= (plist-get (car devices) :directory)
+                             (expand-file-name temp-dir)))
+            (should (gethash (expand-file-name temp-dir)
+                             whisper-dvr--mount-cache))))
+      (delete-directory temp-dir t))))
+
+(ert-deftest whisper-dvr-test-detect-connected-devices-deduplicates ()
+  "Test that a path listed twice is reported once."
+  (let ((temp-dir (make-temp-file "whisper-dvr-test" t)))
+    (unwind-protect
+        (let ((whisper-dvr--mount-cache (make-hash-table :test 'equal))
+              (whisper-dvr-directory temp-dir)
+              (whisper-dvr-sd-card-directory temp-dir)
+              (whisper-dvr-internal-memory-directory temp-dir)
+              (whisper-dvr-volume-mount-points (list temp-dir)))
+          (should (= 1 (length (whisper-dvr--detect-connected-devices)))))
+      (delete-directory temp-dir t))))
+
+(ert-deftest whisper-dvr-test-notify-falls-back-to-message ()
+  "Test that an unsupported platform reports through the echo area."
+  (let ((reported ""))
+    (cl-letf (((symbol-function 'whisper-dvr--detect-os) (lambda () 'windows))
+              ((symbol-function 'message)
+               (lambda (fmt &rest args)
+                 (setq reported (apply #'format fmt args)))))
+      (whisper-dvr--notify "Title" "Body"))
+    (should (string= reported "Title: Body"))))
+
+;;; ============================================================
+;;; Unit Tests: whisper-dvr-transcribe-file
+;;; ============================================================
+
+(ert-deftest whisper-dvr-test-transcribe-file-rejects-unreadable-file ()
+  "Test that an absent audio file raises a user error."
+  (should-error (whisper-dvr-transcribe-file "/nonexistent/audio.mp3")
+                :type 'user-error))
+
+(ert-deftest whisper-dvr-test-transcribe-file-calls-whisper-run ()
+  "Test that the file is handed to whisper-run and the hook is run."
+  (let ((temp-file (make-temp-file "whisper-dvr-test" nil ".mp3"))
+        (run-arg nil)
+        (hook-args nil))
+    (unwind-protect
+        (let ((whisper-dvr-transcribe-complete-hook
+               (list (lambda (&rest args) (setq hook-args args)))))
+          (cl-letf (((symbol-function 'whisper-run)
+                     (lambda (file) (setq run-arg file))))
+            (whisper-dvr-transcribe-file temp-file))
+          (should (string= run-arg (expand-file-name temp-file)))
+          (should (string= (car hook-args) (expand-file-name temp-file)))
+          (should (string-suffix-p ".txt" (cadr hook-args))))
+      (delete-file temp-file))))
+
+;;; ============================================================
 ;;; Unit Tests: whisper-dvr (main function)
 ;;; ============================================================
 
