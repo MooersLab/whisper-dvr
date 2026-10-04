@@ -7,7 +7,7 @@
 @c %**end of header
 
 @copying
-This manual is for whisper-dvr (version 0.5.0).
+This manual is for whisper-dvr (version 0.6.0).
 
 Copyright @copyright{} 2024-2026 Blaine Mooers.
 
@@ -51,6 +51,7 @@ whisper.el.
 * Installation::        How to install whisper-dvr
 * Configuration::       Configuring whisper-dvr
 * Usage::               How to use whisper-dvr
+* LLM Post-Processing:: Structuring transcripts with an LLM
 * Customization::       Available customization options
 * Troubleshooting::     Common issues and solutions
 * Contributing::        How to contribute
@@ -204,7 +205,9 @@ command can be run before the recorder is plugged in.
 @item whisper-dvr
 @findex whisper-dvr
 List audio files from the DVR directory and transcribe the selected file.
-Default keybinding: @kbd{C-c w d}.
+Default keybinding: @kbd{C-c w d}.  When @code{whisper-dvr-llm-postprocess} is non-nil, the raw
+transcript is then structured by an LLM (@pxref{LLM Post-Processing}).
+A prefix argument inverts that setting for one run.
 
 @item whisper-dvr-set-directory
 @findex whisper-dvr-set-directory
@@ -226,6 +229,239 @@ With a prefix argument, save the value for later sessions.
 Transcribe one audio file without the selection menu.  This is the
 entry point used by batch transcription and by the automatic device
 handlers.
+@end table
+
+@node LLM Post-Processing
+@chapter LLM Post-Processing
+@cindex LLM post-processing
+@cindex transcript-parser skill
+
+whisper.el returns a raw transcript.  When
+@code{whisper-dvr-llm-postprocess} is non-nil, whisper-dvr sends that
+raw text in the background to a large language model that applies the
+transcript-parser skill.  The skill returns a LaTeX fragment with
+@code{\subsubsection} headings, @code{\index} keys, one sentence per
+line, expanded contractions, corrected grammar, and a closing list of
+TODO items.
+
+Think of whisper.el as a court reporter who takes down every word, and
+of the LLM as the editor who turns that record into a clean document.
+The editor works in a separate process, so Emacs stays responsive.
+
+@section How it works
+
+@enumerate
+@item
+@code{whisper-dvr} transcribes the selected recording, and whisper.el
+inserts the raw text at point.
+@item
+whisper-dvr captures the text through
+@code{whisper-after-transcription-hook} and
+@code{whisper-after-insert-hook}.
+@item
+The text goes to the backend named by @code{whisper-dvr-llm-backend}.
+@item
+The answer replaces the raw text, follows it, or opens in its own
+buffer, according to @code{whisper-dvr-llm-insert-method}.
+@end enumerate
+
+The raw transcript is never lost.  A failed or timed out request
+leaves it in place.  When the raw text was edited while the model was
+working, the result is inserted after it instead of replacing it.
+
+A prefix argument to @code{whisper-dvr} inverts
+@code{whisper-dvr-llm-postprocess} for one run.
+
+@section Choosing the model or harness
+@cindex backends, LLM
+@cindex local models
+
+@table @code
+@item claude-code
+Claude Code in print mode.  The harness loads the skill named by
+@code{whisper-dvr-llm-skill-name} from its own skills directory.
+
+@item anthropic
+The Anthropic Messages API through curl.  The body of
+@code{whisper-dvr-llm-skill-file} becomes the system prompt.
+
+@item openai-compatible
+Any OpenAI style chat completions server.  Ollama, the llama.cpp
+server, LM Studio, and vLLM all qualify, so this backend runs the skill
+with a local model.
+
+@item command
+Any shell command that reads the prompt on standard input and prints
+the answer.  Every @samp{%m} in @code{whisper-dvr-llm-command} is
+replaced by the model name.
+
+@item function
+An Emacs Lisp function called with the instructions, the transcript, a
+callback, and an error callback.  This backend suits gptel or ellama.
+@end table
+
+@lisp
+;; Claude Code as the harness.
+(setq whisper-dvr-llm-postprocess t
+      whisper-dvr-llm-backend 'claude-code)
+
+;; A local model served by Ollama.
+(setq whisper-dvr-llm-backend 'openai-compatible
+      whisper-dvr-llm-model "qwen2.5:14b")
+
+;; The Anthropic API.  The key comes from ANTHROPIC_API_KEY or
+;; from auth-source for the host api.anthropic.com.
+(setq whisper-dvr-llm-backend 'anthropic
+      whisper-dvr-llm-model "claude-sonnet-5-5")
+@end lisp
+
+@section LLM commands
+
+@table @code
+@item whisper-dvr-toggle-llm-postprocess
+@findex whisper-dvr-toggle-llm-postprocess
+Turn post-processing of new transcripts on or off.
+
+@item whisper-dvr-llm-select-backend
+@findex whisper-dvr-llm-select-backend
+Choose the backend and the model for the current session.
+
+@item whisper-dvr-llm-process-region
+@findex whisper-dvr-llm-process-region
+Post-process the active region, or the whole buffer when no region is
+active.
+
+@item whisper-dvr-llm-process-file
+@findex whisper-dvr-llm-process-file
+Read a transcript file such as @file{notes.txt} and write
+@file{notes_parsed.tex} beside it.  With a prefix argument, visit the
+new file.
+
+@item whisper-dvr-llm-cancel
+@findex whisper-dvr-llm-cancel
+Cancel every running request.  The raw text stays in place.
+
+@item whisper-dvr-llm-test-backend
+@findex whisper-dvr-llm-test-backend
+Send a short sample transcript to the configured backend and report
+the result.
+
+@item whisper-dvr-llm-show-log
+@findex whisper-dvr-llm-show-log
+Show the command, exit code, standard error, and standard output of
+each LLM run.  Claude Code writes many of its errors to standard
+output, so check here when a failure message is unclear.
+@end table
+
+@section LLM settings
+@cindex customization, LLM
+
+@table @code
+@item whisper-dvr-llm-postprocess
+@vindex whisper-dvr-llm-postprocess
+Non-nil sends new transcripts to the LLM.  Default @code{nil}.
+
+@item whisper-dvr-llm-backend
+@vindex whisper-dvr-llm-backend
+The LLM or harness that runs the skill.  Default @code{claude-code}.
+
+@item whisper-dvr-llm-model
+@vindex whisper-dvr-llm-model
+Model name, or @code{nil} for the default in
+@code{whisper-dvr-llm-default-models}.
+
+@item whisper-dvr-llm-default-models
+@vindex whisper-dvr-llm-default-models
+Fallback model for each backend.
+
+@item whisper-dvr-llm-api-url
+@vindex whisper-dvr-llm-api-url
+Endpoint for the HTTP backends, or @code{nil} for the default.
+
+@item whisper-dvr-llm-api-key
+@vindex whisper-dvr-llm-api-key
+A string, a function that returns a string, or @code{nil} to read the
+environment and then auth-source.
+
+@item whisper-dvr-llm-skill-name
+@vindex whisper-dvr-llm-skill-name
+The skill the harness is asked to run.  Default
+@code{"transcript-parser"}.
+
+@item whisper-dvr-llm-skill-file
+@vindex whisper-dvr-llm-skill-file
+The SKILL.md file whose body instructs the other backends.
+
+@item whisper-dvr-llm-default-instructions
+@vindex whisper-dvr-llm-default-instructions
+A condensed copy of the skill used when the skill file is missing.
+
+@item whisper-dvr-llm-claude-program
+@vindex whisper-dvr-llm-claude-program
+Path to Claude Code.  Emacs started from the macOS Dock may need a full
+path.
+
+@item whisper-dvr-llm-claude-prompt
+@vindex whisper-dvr-llm-claude-prompt
+The prompt passed to @command{claude -p}.
+
+@item whisper-dvr-llm-claude-args
+@vindex whisper-dvr-llm-claude-args
+Extra arguments for Claude Code.
+
+@item whisper-dvr-llm-claude-unset-env
+@vindex whisper-dvr-llm-claude-unset-env
+Environment variables removed before Claude Code runs.  The default
+removes @env{ANTHROPIC_API_KEY}, so Claude Code uses the Pro or Max
+subscription login instead of billing an API key.  A ``Credit balance
+is too low'' error means the key was used.
+
+@item whisper-dvr-llm-claude-embed-skill
+@vindex whisper-dvr-llm-claude-embed-skill
+Non-nil also passes the skill text with
+@option{--append-system-prompt}.
+
+@item whisper-dvr-llm-command
+@vindex whisper-dvr-llm-command
+Command line for the @code{command} backend.
+
+@item whisper-dvr-llm-function
+@vindex whisper-dvr-llm-function
+Function for the @code{function} backend.
+
+@item whisper-dvr-llm-insert-method
+@vindex whisper-dvr-llm-insert-method
+One of @code{replace}, @code{append}, or @code{buffer}.
+
+@item whisper-dvr-llm-output-buffer-name
+@vindex whisper-dvr-llm-output-buffer-name
+Buffer used by the @code{buffer} method.
+
+@item whisper-dvr-llm-timeout
+@vindex whisper-dvr-llm-timeout
+Seconds before a request is abandoned.  Default 900.
+
+@item whisper-dvr-llm-max-tokens
+@vindex whisper-dvr-llm-max-tokens
+Output token limit for the HTTP backends.
+
+@item whisper-dvr-llm-temperature
+@vindex whisper-dvr-llm-temperature
+Sampling temperature, or @code{nil} for the server default.
+
+@item whisper-dvr-llm-curl-program
+@vindex whisper-dvr-llm-curl-program
+Path to curl.
+
+@item whisper-dvr-llm-wait-message
+@vindex whisper-dvr-llm-wait-message
+Notice shown in the echo area while the LLM works.  The default reads
+``Please wait, the LLM is parsing the transcript.  This step can take
+several minutes.''  Set it to @code{nil} to show nothing.
+
+@item whisper-dvr-llm-after-process-hook
+@vindex whisper-dvr-llm-after-process-hook
+Functions called with the start and end of the inserted result.
 @end table
 
 @node Customization
@@ -285,6 +521,16 @@ Default: @code{'("mp3" "wav" "m4a")}
 @node Troubleshooting
 @chapter Troubleshooting
 @cindex troubleshooting
+
+@section LLM post-processing skipped or failed
+@cindex error, LLM
+
+A warning that LLM post-processing was skipped means Emacs could not
+find @command{claude}, @command{curl}, or the configured command.  Set
+@code{whisper-dvr-llm-claude-program} to a full path.  When a request
+fails, the raw transcript stays in the buffer and the message names the
+cause, such as an HTTP 401 for a bad key or a timeout for a long
+recording on a slow local model.
 
 @section DVR directory does not exist
 @cindex error, directory not found

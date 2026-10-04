@@ -20,7 +20,7 @@ VERSION = $(shell grep -E "^;; Version:" whisper-dvr.el | sed 's/;; Version: //'
 MAKEINFO ?= makeinfo
 TEXI2PDF ?= texi2pdf
 
-.PHONY: all test test-verbose lint compile clean help install-deps info pdf html docs
+.PHONY: all test test-verbose test-llm lint compile clean help install-deps info pdf html docs
 
 all: compile test lint
 
@@ -34,6 +34,7 @@ help:
 	@echo "  all           Run compile, test, and lint (default)"
 	@echo "  test          Run ERT tests"
 	@echo "  test-verbose  Run ERT tests with verbose output"
+	@echo "  test-llm      Run only the LLM post-processing tests"
 	@echo "  lint          Run package-lint and checkdoc"
 	@echo "  compile       Byte-compile the source files"
 	@echo "  clean         Remove compiled files"
@@ -78,6 +79,19 @@ test-verbose:
 	  -l $(SRCS) \
 	  -l $(TESTS) \
 	  --eval "(ert-run-tests-batch-and-exit t)"
+
+## Run only the LLM post-processing tests
+test-llm:
+	@echo "Running LLM post-processing tests..."
+	$(BATCH) \
+	  --eval "(add-to-list 'load-path \".\")" \
+	  --eval "(setq whisper-install-whispercpp nil)" \
+	  --eval "(provide 'whisper)" \
+	  --eval "(defun whisper-run (&optional _arg) nil)" \
+	  -l ert \
+	  -l $(SRCS) \
+	  -l $(TESTS) \
+	  --eval "(ert-run-tests-batch-and-exit \"^whisper-dvr-test-llm-\")"
 
 ## Lint the source files
 lint: lint-checkdoc lint-package

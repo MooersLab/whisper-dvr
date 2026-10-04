@@ -1,7 +1,7 @@
 This is whisper-dvr.info, produced by makeinfo version 7.1 from
 whisper-dvr.texi.
 
-This manual is for whisper-dvr (version 0.5.0).
+This manual is for whisper-dvr (version 0.6.0).
 
    Copyright © 2024-2026 Blaine Mooers.
 
@@ -24,7 +24,7 @@ whisper-dvr
 whisper-dvr is an Emacs package that provides a convenient interface for
 transcribing audio files from a digital voice recorder using whisper.el.
 
-   This manual is for whisper-dvr (version 0.5.0).
+   This manual is for whisper-dvr (version 0.6.0).
 
    Copyright © 2024-2026 Blaine Mooers.
 
@@ -40,6 +40,7 @@ transcribing audio files from a digital voice recorder using whisper.el.
 * Installation::        How to install whisper-dvr
 * Configuration::       Configuring whisper-dvr
 * Usage::               How to use whisper-dvr
+* LLM Post-Processing:: Structuring transcripts with an LLM
 * Customization::       Available customization options
 * Troubleshooting::     Common issues and solutions
 * Contributing::        How to contribute
@@ -113,7 +114,7 @@ Basic configuration:
    Set the directory to match where your DVR mounts on your system.
 
 
-File: whisper-dvr.info,  Node: Usage,  Next: Customization,  Prev: Configuration,  Up: Top
+File: whisper-dvr.info,  Node: Usage,  Next: LLM Post-Processing,  Prev: Configuration,  Up: Top
 
 4 Usage
 *******
@@ -162,7 +163,10 @@ command can be run before the recorder is plugged in.
 
 ‘whisper-dvr’
      List audio files from the DVR directory and transcribe the selected
-     file.  Default keybinding: ‘C-c w d’.
+     file.  Default keybinding: ‘C-c w d’.  When
+     ‘whisper-dvr-llm-postprocess’ is non-nil, the raw transcript is
+     then structured by an LLM (*note LLM Post-Processing::).  A prefix
+     argument inverts that setting for one run.
 
 ‘whisper-dvr-set-directory’
      Interactively set the DVR directory path.
@@ -181,12 +185,201 @@ command can be run before the recorder is plugged in.
      handlers.
 
 
-File: whisper-dvr.info,  Node: Customization,  Next: Troubleshooting,  Prev: Usage,  Up: Top
+File: whisper-dvr.info,  Node: LLM Post-Processing,  Next: Customization,  Prev: Usage,  Up: Top
 
-5 Customization
+5 LLM Post-Processing
+*********************
+
+whisper.el returns a raw transcript.  When ‘whisper-dvr-llm-postprocess’
+is non-nil, whisper-dvr sends that raw text in the background to a large
+language model that applies the transcript-parser skill.  The skill
+returns a LaTeX fragment with ‘\subsubsection’ headings, ‘\index’ keys,
+one sentence per line, expanded contractions, corrected grammar, and a
+closing list of TODO items.
+
+   Think of whisper.el as a court reporter who takes down every word,
+and of the LLM as the editor who turns that record into a clean
+document.  The editor works in a separate process, so Emacs stays
+responsive.
+
+5.1 How it works
+================
+
+  1. ‘whisper-dvr’ transcribes the selected recording, and whisper.el
+     inserts the raw text at point.
+  2. whisper-dvr captures the text through
+     ‘whisper-after-transcription-hook’ and ‘whisper-after-insert-hook’.
+  3. The text goes to the backend named by ‘whisper-dvr-llm-backend’.
+  4. The answer replaces the raw text, follows it, or opens in its own
+     buffer, according to ‘whisper-dvr-llm-insert-method’.
+
+   The raw transcript is never lost.  A failed or timed out request
+leaves it in place.  When the raw text was edited while the model was
+working, the result is inserted after it instead of replacing it.
+
+   A prefix argument to ‘whisper-dvr’ inverts
+‘whisper-dvr-llm-postprocess’ for one run.
+
+5.2 Choosing the model or harness
+=================================
+
+‘claude-code’
+     Claude Code in print mode.  The harness loads the skill named by
+     ‘whisper-dvr-llm-skill-name’ from its own skills directory.
+
+‘anthropic’
+     The Anthropic Messages API through curl.  The body of
+     ‘whisper-dvr-llm-skill-file’ becomes the system prompt.
+
+‘openai-compatible’
+     Any OpenAI style chat completions server.  Ollama, the llama.cpp
+     server, LM Studio, and vLLM all qualify, so this backend runs the
+     skill with a local model.
+
+‘command’
+     Any shell command that reads the prompt on standard input and
+     prints the answer.  Every ‘%m’ in ‘whisper-dvr-llm-command’ is
+     replaced by the model name.
+
+‘function’
+     An Emacs Lisp function called with the instructions, the
+     transcript, a callback, and an error callback.  This backend suits
+     gptel or ellama.
+
+     ;; Claude Code as the harness.
+     (setq whisper-dvr-llm-postprocess t
+           whisper-dvr-llm-backend 'claude-code)
+
+     ;; A local model served by Ollama.
+     (setq whisper-dvr-llm-backend 'openai-compatible
+           whisper-dvr-llm-model "qwen2.5:14b")
+
+     ;; The Anthropic API.  The key comes from ANTHROPIC_API_KEY or
+     ;; from auth-source for the host api.anthropic.com.
+     (setq whisper-dvr-llm-backend 'anthropic
+           whisper-dvr-llm-model "claude-sonnet-5-5")
+
+5.3 LLM commands
+================
+
+‘whisper-dvr-toggle-llm-postprocess’
+     Turn post-processing of new transcripts on or off.
+
+‘whisper-dvr-llm-select-backend’
+     Choose the backend and the model for the current session.
+
+‘whisper-dvr-llm-process-region’
+     Post-process the active region, or the whole buffer when no region
+     is active.
+
+‘whisper-dvr-llm-process-file’
+     Read a transcript file such as ‘notes.txt’ and write
+     ‘notes_parsed.tex’ beside it.  With a prefix argument, visit the
+     new file.
+
+‘whisper-dvr-llm-cancel’
+     Cancel every running request.  The raw text stays in place.
+
+‘whisper-dvr-llm-test-backend’
+     Send a short sample transcript to the configured backend and report
+     the result.
+
+‘whisper-dvr-llm-show-log’
+     Show the command, exit code, standard error, and standard output of
+     each LLM run.  Claude Code writes many of its errors to standard
+     output, so check here when a failure message is unclear.
+
+5.4 LLM settings
+================
+
+‘whisper-dvr-llm-postprocess’
+     Non-nil sends new transcripts to the LLM. Default ‘nil’.
+
+‘whisper-dvr-llm-backend’
+     The LLM or harness that runs the skill.  Default ‘claude-code’.
+
+‘whisper-dvr-llm-model’
+     Model name, or ‘nil’ for the default in
+     ‘whisper-dvr-llm-default-models’.
+
+‘whisper-dvr-llm-default-models’
+     Fallback model for each backend.
+
+‘whisper-dvr-llm-api-url’
+     Endpoint for the HTTP backends, or ‘nil’ for the default.
+
+‘whisper-dvr-llm-api-key’
+     A string, a function that returns a string, or ‘nil’ to read the
+     environment and then auth-source.
+
+‘whisper-dvr-llm-skill-name’
+     The skill the harness is asked to run.  Default
+     ‘"transcript-parser"’.
+
+‘whisper-dvr-llm-skill-file’
+     The SKILL.md file whose body instructs the other backends.
+
+‘whisper-dvr-llm-default-instructions’
+     A condensed copy of the skill used when the skill file is missing.
+
+‘whisper-dvr-llm-claude-program’
+     Path to Claude Code.  Emacs started from the macOS Dock may need a
+     full path.
+
+‘whisper-dvr-llm-claude-prompt’
+     The prompt passed to ‘claude -p’.
+
+‘whisper-dvr-llm-claude-args’
+     Extra arguments for Claude Code.
+
+‘whisper-dvr-llm-claude-unset-env’
+     Environment variables removed before Claude Code runs.  The default
+     removes ‘ANTHROPIC_API_KEY’, so Claude Code uses the Pro or Max
+     subscription login instead of billing an API key.  A "Credit
+     balance is too low" error means the key was used.
+
+‘whisper-dvr-llm-claude-embed-skill’
+     Non-nil also passes the skill text with ‘--append-system-prompt’.
+
+‘whisper-dvr-llm-command’
+     Command line for the ‘command’ backend.
+
+‘whisper-dvr-llm-function’
+     Function for the ‘function’ backend.
+
+‘whisper-dvr-llm-insert-method’
+     One of ‘replace’, ‘append’, or ‘buffer’.
+
+‘whisper-dvr-llm-output-buffer-name’
+     Buffer used by the ‘buffer’ method.
+
+‘whisper-dvr-llm-timeout’
+     Seconds before a request is abandoned.  Default 900.
+
+‘whisper-dvr-llm-max-tokens’
+     Output token limit for the HTTP backends.
+
+‘whisper-dvr-llm-temperature’
+     Sampling temperature, or ‘nil’ for the server default.
+
+‘whisper-dvr-llm-curl-program’
+     Path to curl.
+
+‘whisper-dvr-llm-wait-message’
+     Notice shown in the echo area while the LLM works.  The default
+     reads "Please wait, the LLM is parsing the transcript.  This step
+     can take several minutes."  Set it to ‘nil’ to show nothing.
+
+‘whisper-dvr-llm-after-process-hook’
+     Functions called with the start and end of the inserted result.
+
+
+File: whisper-dvr.info,  Node: Customization,  Next: Troubleshooting,  Prev: LLM Post-Processing,  Up: Top
+
+6 Customization
 ***************
 
-5.1 whisper-dvr-directory
+6.1 whisper-dvr-directory
 =========================
 
 The directory path where your DVR stores recordings.
@@ -195,7 +388,7 @@ The directory path where your DVR stores recordings.
 
      (setq whisper-dvr-directory "/your/dvr/path")
 
-5.2 whisper-dvr-sd-card-directory
+6.2 whisper-dvr-sd-card-directory
 =================================
 
 The directory path where the removable SD card stores recordings.
@@ -205,7 +398,7 @@ The directory path where the removable SD card stores recordings.
      (setq whisper-dvr-sd-card-directory
            "/Volumes/MEMORY CARD/private/SONY/REC_FILE/FOLDER01")
 
-5.3 whisper-dvr-internal-memory-directory
+6.3 whisper-dvr-internal-memory-directory
 =========================================
 
 The directory path where the recorder's built-in memory stores
@@ -216,7 +409,7 @@ recordings.
      (setq whisper-dvr-internal-memory-directory
            "/Volumes/IC RECORDER/REC_FILE/FOLDER01")
 
-5.4 whisper-dvr-file-extensions
+6.4 whisper-dvr-file-extensions
 ===============================
 
 List of audio file extensions to include when listing files.
@@ -228,10 +421,20 @@ List of audio file extensions to include when listing files.
 
 File: whisper-dvr.info,  Node: Troubleshooting,  Next: Contributing,  Prev: Customization,  Up: Top
 
-6 Troubleshooting
+7 Troubleshooting
 *****************
 
-6.1 DVR directory does not exist
+7.1 LLM post-processing skipped or failed
+=========================================
+
+A warning that LLM post-processing was skipped means Emacs could not
+find ‘claude’, ‘curl’, or the configured command.  Set
+‘whisper-dvr-llm-claude-program’ to a full path.  When a request fails,
+the raw transcript stays in the buffer and the message names the cause,
+such as an HTTP 401 for a bad key or a timeout for a long recording on a
+slow local model.
+
+7.2 DVR directory does not exist
 ================================
 
 Ensure your DVR is connected and mounted.  Check the mount path with:
@@ -239,7 +442,7 @@ Ensure your DVR is connected and mounted.  Check the mount path with:
      ls /Volumes/  # macOS
      ls /media/    # Linux
 
-6.2 No audio files found
+7.3 No audio files found
 ========================
 
 Verify that:
@@ -247,7 +450,7 @@ Verify that:
    • The directory contains files with supported extensions
    • File permissions allow reading
 
-6.3 Transcription starts recording instead of transcribing
+7.4 Transcription starts recording instead of transcribing
 ==========================================================
 
 This was a bug in versions prior to 0.2.0.  The issue occurred because
@@ -260,7 +463,7 @@ with the file path directly.
 
 File: whisper-dvr.info,  Node: Contributing,  Next: License,  Prev: Troubleshooting,  Up: Top
 
-7 Contributing
+8 Contributing
 **************
 
 Contributions are welcome!
@@ -274,7 +477,7 @@ Contributions are welcome!
 
 File: whisper-dvr.info,  Node: License,  Next: Index,  Prev: Contributing,  Up: Top
 
-8 License
+9 License
 *********
 
 whisper-dvr is free software: you can redistribute it and/or modify it
@@ -294,24 +497,30 @@ Concept Index
  [index ]
 * Menu:
 
-* commands:                              Usage.                (line 48)
-* configuration:                         Configuration.        (line  6)
-* contributing:                          Contributing.         (line  6)
-* customization, directory:              Customization.        (line  9)
-* customization, file extensions:        Customization.        (line 39)
-* customization, internal memory:        Customization.        (line 28)
-* customization, SD card:                Customization.        (line 18)
-* directory, changing:                   Usage.                (line 22)
-* error, directory not found:            Troubleshooting.      (line  9)
-* error, no files found:                 Troubleshooting.      (line 17)
-* error, wrong number of arguments:      Troubleshooting.      (line 25)
-* installation, manual:                  Installation.         (line 18)
-* installation, straight.el:             Installation.         (line  9)
-* memory card:                           Usage.                (line 29)
-* SD card:                               Usage.                (line 29)
-* troubleshooting:                       Troubleshooting.      (line  5)
-* usage, basic:                          Usage.                (line  9)
-* whisper-file, API change:              Troubleshooting.      (line 25)
+* backends, LLM:                         LLM Post-Processing. (line  39)
+* commands:                              Usage.               (line  48)
+* configuration:                         Configuration.       (line   6)
+* contributing:                          Contributing.        (line   6)
+* customization, directory:              Customization.       (line   9)
+* customization, file extensions:        Customization.       (line  39)
+* customization, internal memory:        Customization.       (line  28)
+* customization, LLM:                    LLM Post-Processing. (line 108)
+* customization, SD card:                Customization.       (line  18)
+* directory, changing:                   Usage.               (line  22)
+* error, directory not found:            Troubleshooting.     (line  19)
+* error, LLM:                            Troubleshooting.     (line   9)
+* error, no files found:                 Troubleshooting.     (line  27)
+* error, wrong number of arguments:      Troubleshooting.     (line  35)
+* installation, manual:                  Installation.        (line  18)
+* installation, straight.el:             Installation.        (line   9)
+* LLM post-processing:                   LLM Post-Processing. (line   6)
+* local models:                          LLM Post-Processing. (line  39)
+* memory card:                           Usage.               (line  29)
+* SD card:                               Usage.               (line  29)
+* transcript-parser skill:               LLM Post-Processing. (line   6)
+* troubleshooting:                       Troubleshooting.     (line   5)
+* usage, basic:                          Usage.               (line   9)
+* whisper-file, API change:              Troubleshooting.     (line  35)
 
 Function Index
 ==============
@@ -319,14 +528,21 @@ Function Index
  [index ]
 * Menu:
 
-* whisper-dvr:                           Usage.                (line 49)
-* whisper-dvr-set-directory:             Usage.                (line 22)
-* whisper-dvr-set-directory <1>:         Usage.                (line 53)
-* whisper-dvr-set-directory-to-internal-memory: Usage.         (line 29)
-* whisper-dvr-set-directory-to-internal-memory <1>: Usage.     (line 60)
-* whisper-dvr-set-directory-to-sd-card:  Usage.                (line 29)
-* whisper-dvr-set-directory-to-sd-card <1>: Usage.             (line 56)
-* whisper-dvr-transcribe-file:           Usage.                (line 64)
+* whisper-dvr:                           Usage.               (line  49)
+* whisper-dvr-llm-cancel:                LLM Post-Processing. (line  94)
+* whisper-dvr-llm-process-file:          LLM Post-Processing. (line  89)
+* whisper-dvr-llm-process-region:        LLM Post-Processing. (line  85)
+* whisper-dvr-llm-select-backend:        LLM Post-Processing. (line  82)
+* whisper-dvr-llm-show-log:              LLM Post-Processing. (line 101)
+* whisper-dvr-llm-test-backend:          LLM Post-Processing. (line  97)
+* whisper-dvr-set-directory:             Usage.               (line  22)
+* whisper-dvr-set-directory <1>:         Usage.               (line  56)
+* whisper-dvr-set-directory-to-internal-memory: Usage.        (line  29)
+* whisper-dvr-set-directory-to-internal-memory <1>: Usage.    (line  63)
+* whisper-dvr-set-directory-to-sd-card:  Usage.               (line  29)
+* whisper-dvr-set-directory-to-sd-card <1>: Usage.            (line  59)
+* whisper-dvr-toggle-llm-postprocess:    LLM Post-Processing. (line  79)
+* whisper-dvr-transcribe-file:           Usage.               (line  67)
 
 Variable Index
 ==============
@@ -334,24 +550,49 @@ Variable Index
  [index ]
 * Menu:
 
-* whisper-dvr-directory:                 Customization.        (line  9)
-* whisper-dvr-file-extensions:           Customization.        (line 39)
-* whisper-dvr-internal-memory-directory: Customization.        (line 28)
-* whisper-dvr-sd-card-directory:         Customization.        (line 18)
+* whisper-dvr-directory:                 Customization.       (line   9)
+* whisper-dvr-file-extensions:           Customization.       (line  39)
+* whisper-dvr-internal-memory-directory: Customization.       (line  28)
+* whisper-dvr-llm-after-process-hook:    LLM Post-Processing. (line 187)
+* whisper-dvr-llm-api-key:               LLM Post-Processing. (line 125)
+* whisper-dvr-llm-api-url:               LLM Post-Processing. (line 122)
+* whisper-dvr-llm-backend:               LLM Post-Processing. (line 112)
+* whisper-dvr-llm-claude-args:           LLM Post-Processing. (line 146)
+* whisper-dvr-llm-claude-embed-skill:    LLM Post-Processing. (line 155)
+* whisper-dvr-llm-claude-program:        LLM Post-Processing. (line 139)
+* whisper-dvr-llm-claude-prompt:         LLM Post-Processing. (line 143)
+* whisper-dvr-llm-claude-unset-env:      LLM Post-Processing. (line 149)
+* whisper-dvr-llm-command:               LLM Post-Processing. (line 158)
+* whisper-dvr-llm-curl-program:          LLM Post-Processing. (line 179)
+* whisper-dvr-llm-default-instructions:  LLM Post-Processing. (line 136)
+* whisper-dvr-llm-default-models:        LLM Post-Processing. (line 119)
+* whisper-dvr-llm-function:              LLM Post-Processing. (line 161)
+* whisper-dvr-llm-insert-method:         LLM Post-Processing. (line 164)
+* whisper-dvr-llm-max-tokens:            LLM Post-Processing. (line 173)
+* whisper-dvr-llm-model:                 LLM Post-Processing. (line 115)
+* whisper-dvr-llm-output-buffer-name:    LLM Post-Processing. (line 167)
+* whisper-dvr-llm-postprocess:           LLM Post-Processing. (line 109)
+* whisper-dvr-llm-skill-file:            LLM Post-Processing. (line 133)
+* whisper-dvr-llm-skill-name:            LLM Post-Processing. (line 129)
+* whisper-dvr-llm-temperature:           LLM Post-Processing. (line 176)
+* whisper-dvr-llm-timeout:               LLM Post-Processing. (line 170)
+* whisper-dvr-llm-wait-message:          LLM Post-Processing. (line 182)
+* whisper-dvr-sd-card-directory:         Customization.       (line  18)
 
 
 
 Tag Table:
 Node: Top620
-Node: Introduction1696
-Node: Installation2461
-Node: Configuration3108
-Node: Usage3453
-Node: Customization5683
-Node: Troubleshooting6907
-Node: Contributing7856
-Node: License8159
-Node: Index8507
+Node: Introduction1756
+Node: Installation2521
+Node: Configuration3168
+Node: Usage3513
+Node: LLM Post-Processing5948
+Node: Customization12650
+Node: Troubleshooting13888
+Node: Contributing15294
+Node: License15597
+Node: Index15945
 
 End Tag Table
 

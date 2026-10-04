@@ -5,11 +5,20 @@
 ;; URL: https://github.com/MooersLab/whisper-dvr
 ;; Keywords: multimedia, convenience
 ;; Package-Requires: ((emacs "27.1") (whisper "0.1"))
-;; Version: 0.5.0
+;; Version: 0.6.0
 
 ;;; Commentary:
 ;; This package provides functions to list, transcribe, and manage MP3 files
 ;; from a digital voice recorder using the whisper.el package.
+;;
+;; Version 0.6.0 adds optional LLM post-processing.  When
+;; `whisper-dvr-llm-postprocess' is non-nil, the raw transcript that
+;; whisper.el inserts is sent in the background to an LLM that applies
+;; the transcript-parser skill.  The structured LaTeX that comes back
+;; replaces the raw text in the current buffer.  The LLM may be Claude
+;; Code (a harness), the Anthropic API, a local model behind an
+;; OpenAI-compatible server such as Ollama, any shell command, or an
+;; Emacs Lisp function.  See the `whisper-dvr-llm' customization group.
 
 ;;; Code:
 
@@ -17,6 +26,9 @@
 (require 'dired)
 (require 'cl-lib)
 (require 'subr-x)
+(require 'json)
+(require 'url-parse)
+(require 'auth-source)
 
 ;; Functions and variables that live in optional or lazily loaded
 ;; libraries.  These declarations keep the byte compiler quiet without
@@ -27,6 +39,7 @@
 (declare-function request-response-status-code "request")
 (declare-function request-response-data "request")
 (defvar tramp-ssh-controlmaster-options)
+(defvar whisper--marker)
 
 (defgroup whisper-dvr nil
   "Settings for DVR transcription with whisper.el."
@@ -107,6 +120,246 @@ On Linux these are mount points such as /media/<user>/<label>.
 On Windows these are drive letters such as \"E:\" or \"F:\"."
   :type '(repeat string)
   :group 'whisper-dvr)
+
+;;; LLM post-processing settings
+
+(defgroup whisper-dvr-llm nil
+  "Optional post-processing of transcripts with a large language model.
+The raw whisper transcript is sent to an LLM that applies the
+transcript-parser skill and returns structured LaTeX."
+  :group 'whisper-dvr
+  :prefix "whisper-dvr-llm-")
+
+(defcustom whisper-dvr-llm-postprocess nil
+  "If non-nil, send each new transcript to an LLM for post-processing.
+The raw transcript is inserted first, exactly as whisper.el produces it.
+The LLM then runs in the background, and its result replaces or follows
+the raw text according to `whisper-dvr-llm-insert-method'.  A prefix
+argument to `whisper-dvr' inverts this setting for a single run.  Use
+`whisper-dvr-toggle-llm-postprocess' to flip it interactively."
+  :type 'boolean
+  :group 'whisper-dvr-llm)
+
+(defcustom whisper-dvr-llm-backend 'claude-code
+  "The LLM or harness that runs the transcript-parser skill.
+The value is one of these symbols.
+
+  `claude-code'        Claude Code in print mode (claude -p).  The
+                       harness loads the skill named by
+                       `whisper-dvr-llm-skill-name' from its own skills
+                       directory.
+  `anthropic'          The Anthropic Messages API, called with curl.
+  `openai-compatible'  Any server that offers an OpenAI style chat
+                       completions endpoint.  Ollama, the llama.cpp
+                       server, LM Studio, vLLM, and OpenAI all qualify,
+                       so this choice covers local models.
+  `command'            Any shell command that reads the prompt on
+                       standard input and writes the answer on standard
+                       output.  See `whisper-dvr-llm-command'.
+  `function'           An Emacs Lisp function.  See
+                       `whisper-dvr-llm-function'.
+
+Every backend except `claude-code' receives the skill text from
+`whisper-dvr-llm-skill-file' as its instructions."
+  :type '(choice (const :tag "Claude Code CLI (harness)" claude-code)
+                 (const :tag "Anthropic Messages API" anthropic)
+                 (const :tag "OpenAI-compatible server (Ollama, llama.cpp, LM Studio, vLLM)"
+                        openai-compatible)
+                 (const :tag "Shell command reading stdin" command)
+                 (const :tag "Emacs Lisp function" function))
+  :group 'whisper-dvr-llm)
+
+(defcustom whisper-dvr-llm-model nil
+  "Name of the model that runs the skill, or nil for the backend default.
+For `claude-code' a nil value lets the CLI choose its configured model,
+and a string such as \"sonnet\" or \"opus\" is passed with --model.  For
+`anthropic' and `openai-compatible' a nil value falls back to the entry
+in `whisper-dvr-llm-default-models'.  For `command' the value replaces
+every \"%m\" in `whisper-dvr-llm-command'."
+  :type '(choice (const :tag "Backend default" nil)
+                 (string :tag "Model name"))
+  :group 'whisper-dvr-llm)
+
+(defcustom whisper-dvr-llm-default-models
+  '((anthropic . "claude-sonnet-5-5")
+    (openai-compatible . "llama3.1"))
+  "Alist mapping a backend symbol to the model it uses by default.
+`whisper-dvr-llm-model' overrides these values when it is non-nil."
+  :type '(alist :key-type symbol :value-type string)
+  :group 'whisper-dvr-llm)
+
+(defcustom whisper-dvr-llm-api-url nil
+  "Endpoint URL for the HTTP backends, or nil for the default.
+The default for `anthropic' is https://api.anthropic.com/v1/messages.
+The default for `openai-compatible' is the Ollama endpoint
+http://localhost:11434/v1/chat/completions.  The llama.cpp server
+usually listens on http://localhost:8080/v1/chat/completions, and LM
+Studio on http://localhost:1234/v1/chat/completions."
+  :type '(choice (const :tag "Backend default" nil)
+                 (string :tag "URL"))
+  :group 'whisper-dvr-llm)
+
+(defcustom whisper-dvr-llm-api-key nil
+  "API key for the HTTP backends.
+The value may be a string, a function of no arguments that returns a
+string, or nil.  When nil the key comes from the ANTHROPIC_API_KEY or
+OPENAI_API_KEY environment variable and then from `auth-source' for the
+host of the endpoint URL.  Local servers usually need no key, and the
+request then omits the authorization header."
+  :type '(choice (const :tag "Environment or auth-source" nil)
+                 (string :tag "Key")
+                 (function :tag "Function returning the key"))
+  :group 'whisper-dvr-llm)
+
+(defcustom whisper-dvr-llm-skill-name "transcript-parser"
+  "Name of the skill that processes the transcript.
+The `claude-code' backend asks the harness to run the skill with this
+name."
+  :type 'string
+  :group 'whisper-dvr-llm)
+
+(defcustom whisper-dvr-llm-skill-file
+  "~/.claude/skills/transcript-parser/SKILL.md"
+  "Path to the SKILL.md file that holds the skill instructions.
+Backends other than `claude-code' send the body of this file, minus its
+YAML front matter, as the system prompt.  When the file is missing,
+`whisper-dvr-llm-default-instructions' is used instead."
+  :type 'file
+  :group 'whisper-dvr-llm)
+
+(defcustom whisper-dvr-llm-default-instructions
+  "You convert a raw audio transcript into a structured LaTeX fragment.
+Apply these steps in order.
+1. Remove every parenthetical that describes a non-speech sound, such as (coughing), (music), or (wind blowing).  Keep parentheticals that hold spoken content.
+2. Expand every English contraction, for example do not, cannot, it is.  Resolve ambiguous forms such as it's from context.
+3. Correct grammar, subject-verb agreement, tense, and word choice without changing the meaning.  Use because instead of since when the meaning is causal, and keep since for time.  Repair filler-driven run-on sentences.
+4. Group the content by topic.  Give each topic a \\subsubsection heading.  Write one sentence per line and separate paragraphs with one blank line.
+5. Below each \\subsubsection heading write \\index entries for the key terms, one per line, in the form \\index{term}.
+6. Collect every action item the speaker mentioned into a list at the very end, introduced by the line % TODO Items, in the form
+\\begin{itemize}[label=\\unchecked]
+\\item Task.
+\\end{itemize}
+Do not emit a preamble, \\documentclass, \\usepackage, \\begin{document}, or \\end{document}.  Do not use em-dashes, and do not join independent clauses with a colon."
+  "Instructions used when `whisper-dvr-llm-skill-file' cannot be read.
+This text is a condensed copy of the transcript-parser skill."
+  :type 'string
+  :group 'whisper-dvr-llm)
+
+(defcustom whisper-dvr-llm-claude-program "claude"
+  "Name or path of the Claude Code executable for the `claude-code' backend.
+Emacs started from the macOS Dock may not inherit the shell PATH, so a
+full path such as \"~/.local/bin/claude\" may be needed."
+  :type 'string
+  :group 'whisper-dvr-llm)
+
+(defcustom whisper-dvr-llm-claude-prompt
+  "Use the %s skill to process the raw transcript that arrives on standard input.  Treat the transcript as pasted inline text.  Do not write any files.  Return only the processed LaTeX fragment, with no commentary and no code fences."
+  "Prompt passed to claude -p by the `claude-code' backend.
+A \"%s\" in the string is replaced by `whisper-dvr-llm-skill-name'."
+  :type 'string
+  :group 'whisper-dvr-llm)
+
+(defcustom whisper-dvr-llm-claude-args
+  '("--output-format" "text" "--allowedTools" "Skill")
+  "Extra command line arguments for the `claude-code' backend.
+These follow the prompt and the optional --model argument."
+  :type '(repeat string)
+  :group 'whisper-dvr-llm)
+
+(defcustom whisper-dvr-llm-claude-unset-env '("ANTHROPIC_API_KEY")
+  "Environment variables removed before the `claude-code' backend runs.
+Claude Code bills an API key whenever ANTHROPIC_API_KEY is set in its
+environment, even when you are logged in with a Pro or Max
+subscription.  An Emacs that sets this variable for other packages
+would then fail with \"Credit balance is too low\".  Removing the
+variable makes Claude Code use the subscription login from
+claude /login.  Set this option to nil to bill the API key instead."
+  :type '(repeat string)
+  :group 'whisper-dvr-llm)
+
+(defcustom whisper-dvr-llm-claude-embed-skill nil
+  "If non-nil, the `claude-code' backend also embeds the skill text.
+The body of `whisper-dvr-llm-skill-file' is then passed with
+--append-system-prompt.  Turn this on when the harness on this machine
+does not have the skill installed."
+  :type 'boolean
+  :group 'whisper-dvr-llm)
+
+(defcustom whisper-dvr-llm-command '("ollama" "run" "%m")
+  "Command line for the `command' backend, as a list of strings.
+The command receives the skill instructions followed by the transcript
+on standard input and must print the processed text on standard output.
+Every \"%m\" is replaced by `whisper-dvr-llm-model'.  Examples are
+\(\"ollama\" \"run\" \"%m\"), (\"llm\" \"-m\" \"%m\"), and
+\(\"gemini\" \"-m\" \"%m\")."
+  :type '(repeat string)
+  :group 'whisper-dvr-llm)
+
+(defcustom whisper-dvr-llm-function nil
+  "Function for the `function' backend.
+The function is called with four arguments, INSTRUCTIONS, TRANSCRIPT,
+CALLBACK, and ERRBACK.  It must eventually call CALLBACK with the
+processed text as a string, or ERRBACK with an error message.  The call
+may be asynchronous.  This hook makes it easy to route the request
+through gptel or ellama."
+  :type '(choice (const :tag "None" nil) function)
+  :group 'whisper-dvr-llm)
+
+(defcustom whisper-dvr-llm-insert-method 'replace
+  "Where the processed transcript goes when the LLM returns.
+The value is one of these symbols.
+
+  `replace'  Replace the raw transcript in the buffer with the result.
+  `append'   Keep the raw transcript and insert the result after it.
+  `buffer'   Show the result in the buffer named by
+             `whisper-dvr-llm-output-buffer-name'.
+When the raw transcript was edited while the LLM was working, `replace'
+falls back to `append' so that no edits are lost."
+  :type '(choice (const :tag "Replace raw transcript" replace)
+                 (const :tag "Insert after raw transcript" append)
+                 (const :tag "Separate buffer" buffer))
+  :group 'whisper-dvr-llm)
+
+(defcustom whisper-dvr-llm-output-buffer-name "*whisper-dvr-llm*"
+  "Name of the buffer that receives results for the `buffer' method."
+  :type 'string
+  :group 'whisper-dvr-llm)
+
+(defcustom whisper-dvr-llm-timeout 900
+  "Seconds to wait for the LLM before the request is abandoned."
+  :type 'integer
+  :group 'whisper-dvr-llm)
+
+(defcustom whisper-dvr-llm-max-tokens 16000
+  "Maximum number of output tokens requested from the HTTP backends."
+  :type 'integer
+  :group 'whisper-dvr-llm)
+
+(defcustom whisper-dvr-llm-temperature nil
+  "Sampling temperature for the HTTP backends, or nil for the server default."
+  :type '(choice (const :tag "Server default" nil) number)
+  :group 'whisper-dvr-llm)
+
+(defcustom whisper-dvr-llm-curl-program "curl"
+  "Name or path of the curl executable used by the HTTP backends."
+  :type 'string
+  :group 'whisper-dvr-llm)
+
+(defcustom whisper-dvr-llm-wait-message
+  "Please wait, the LLM is parsing the transcript. This step can take several minutes."
+  "Message shown in the echo area while the LLM works on a transcript.
+The message is shown when the request starts and again a moment later,
+because whisper.el clears the echo area when it finishes inserting the
+raw transcript.  Set this option to nil to show no message."
+  :type '(choice (const :tag "No message" nil) string)
+  :group 'whisper-dvr-llm)
+
+(defcustom whisper-dvr-llm-after-process-hook nil
+  "Hook run after a processed transcript has been inserted.
+Each function receives two arguments, the start and the end positions of
+the inserted text, and runs with the receiving buffer current."
+  :type 'hook
+  :group 'whisper-dvr-llm)
 
 (defun whisper-dvr--list-audio-files ()
   "Return a list of audio files in `whisper-dvr-directory'.
@@ -189,11 +442,16 @@ Displays appropriate message on success or error."
      nil)))
 
 ;;;###autoload
-(defun whisper-dvr ()
+(defun whisper-dvr (&optional toggle-llm)
   "List MP3 files from DVR and transcribe selected file with whisper.el.
 The transcription is inserted at point in the current buffer.
-The current buffer must be writable for this function to proceed."
-  (interactive)
+The current buffer must be writable for this function to proceed.
+
+When `whisper-dvr-llm-postprocess' is non-nil, the raw transcript is
+then sent to the LLM chosen by `whisper-dvr-llm-backend', and the
+processed LaTeX replaces it.  A prefix argument TOGGLE-LLM inverts
+`whisper-dvr-llm-postprocess' for this run only."
+  (interactive "P")
   ;; Check if current buffer is writable
   (when buffer-read-only
     (user-error "Current buffer is read-only; cannot insert transcription"))
@@ -215,7 +473,11 @@ The current buffer must be writable for this function to proceed."
            (selected-file (cdr (assoc selection file-alist))))
       (message "Transcribing %s with whisper..."
                (file-name-nondirectory selected-file))
-      ;; Call whisper-file with the selected file
+      (when (if toggle-llm
+                (not whisper-dvr-llm-postprocess)
+              whisper-dvr-llm-postprocess)
+        (whisper-dvr--llm-arm selected-file))
+      ;; Call whisper-run with the selected file
       (whisper-run selected-file))))
 
 ;;;###autoload
@@ -224,11 +486,15 @@ The current buffer must be writable for this function to proceed."
 This is the non-interactive entry point that the batch and the
 automatic paths call.  `whisper-dvr-transcribe-complete-hook' runs with
 the audio path and the expected transcript path once `whisper-run'
-returns."
+returns.  An interactive call also applies LLM post-processing when
+`whisper-dvr-llm-postprocess' is non-nil."
   (interactive "fAudio file to transcribe: ")
   (let ((path (expand-file-name file)))
     (unless (file-readable-p path)
       (user-error "Cannot read audio file: %s" path))
+    (when (and whisper-dvr-llm-postprocess
+               (called-interactively-p 'interactive))
+      (whisper-dvr--llm-arm path))
     (whisper-run path)
     (run-hook-with-args 'whisper-dvr-transcribe-complete-hook
                         path
@@ -1712,6 +1978,732 @@ auto."
                  (ko "언어가 %s(으)로 변경되었습니다")))
           translations)
     (setcdr lang-data translations)))
+
+
+;;; LLM post-processing of transcripts
+;;
+;; The flow resembles a relay race.  whisper.el carries the audio to a
+;; raw transcript and inserts it at point.  whisper-dvr then takes the
+;; baton, hands the raw text to the configured LLM in a background
+;; process, and swaps the raw text for the processed LaTeX when the
+;; LLM finishes.  Emacs stays responsive the whole time.
+
+(cl-defstruct (whisper-dvr--llm-job
+               (:constructor whisper-dvr--llm-job-create)
+               (:copier nil))
+  "State of one running LLM request."
+  process timer stdout stderr temp-files parser callback errback done)
+
+(defvar whisper-dvr--llm-jobs nil
+  "List of `whisper-dvr--llm-job' records that are still running.")
+
+(defvar whisper-dvr--llm-armed-file nil
+  "Audio file whose transcript is waiting for LLM post-processing.")
+
+(defvar whisper-dvr--llm-captured nil
+  "Cons of (START-MARKER . RAW-TEXT) captured from the whisper output.")
+
+;;;; Small helpers
+
+(defun whisper-dvr--llm-program (program)
+  "Return PROGRAM, expanded when it names a file path."
+  (if (string-match-p "[/~]" program)
+      (expand-file-name program)
+    program))
+
+(defun whisper-dvr--llm-executable-p (program)
+  "Return non-nil when PROGRAM can be run."
+  (let ((prog (whisper-dvr--llm-program program)))
+    (if (file-name-absolute-p prog)
+        (and (file-executable-p prog) (not (file-directory-p prog)))
+      (executable-find prog))))
+
+(defun whisper-dvr--llm-model ()
+  "Return the model name for the current backend, or nil."
+  (or whisper-dvr-llm-model
+      (alist-get whisper-dvr-llm-backend whisper-dvr-llm-default-models)))
+
+(defun whisper-dvr--llm-api-url ()
+  "Return the endpoint URL for the current HTTP backend."
+  (or whisper-dvr-llm-api-url
+      (pcase whisper-dvr-llm-backend
+        ('anthropic "https://api.anthropic.com/v1/messages")
+        (_ "http://localhost:11434/v1/chat/completions"))))
+
+(defun whisper-dvr--llm-api-key ()
+  "Return the API key for the current HTTP backend, or nil."
+  (cond
+   ((functionp whisper-dvr-llm-api-key) (funcall whisper-dvr-llm-api-key))
+   ((stringp whisper-dvr-llm-api-key) whisper-dvr-llm-api-key)
+   (t
+    (or (getenv (if (eq whisper-dvr-llm-backend 'anthropic)
+                    "ANTHROPIC_API_KEY"
+                  "OPENAI_API_KEY"))
+        (let ((host (url-host (url-generic-parse-url (whisper-dvr--llm-api-url)))))
+          (when (and host (not (string-empty-p host)))
+            (auth-source-pick-first-password :host host)))))))
+
+(defun whisper-dvr--llm-strip-front-matter (text)
+  "Return TEXT without a leading YAML front matter block."
+  (if (string-match "\\`[ \t\n]*---[ \t]*\n\\(?:.*\n\\)*?---[ \t]*\n" text)
+      (substring text (match-end 0))
+    text))
+
+(defun whisper-dvr--llm-instructions ()
+  "Return the skill instructions sent to non-harness backends.
+The body of `whisper-dvr-llm-skill-file' is preferred.  The text of
+`whisper-dvr-llm-default-instructions' is the fallback."
+  (let* ((file (and whisper-dvr-llm-skill-file
+                    (expand-file-name whisper-dvr-llm-skill-file)))
+         (body (if (and file (file-readable-p file))
+                   (with-temp-buffer
+                     (insert-file-contents file)
+                     (whisper-dvr--llm-strip-front-matter (buffer-string)))
+                 whisper-dvr-llm-default-instructions)))
+    (concat (string-trim body)
+            "\n\nThe transcript is supplied inline in the user message."
+            "  Return only the processed LaTeX fragment,"
+            " with no commentary and no code fences.")))
+
+(defun whisper-dvr--llm-user-message (transcript)
+  "Wrap TRANSCRIPT in the user message sent to the HTTP backends."
+  (concat "Process the following raw transcript.\n\n<transcript>\n"
+          (string-trim transcript)
+          "\n</transcript>\n"))
+
+(defun whisper-dvr--llm-clean-response (text)
+  "Trim TEXT and remove a Markdown code fence that wraps all of it."
+  (let ((s (string-trim text)))
+    (when (string-match "\\````[a-zA-Z]*[ \t]*\n\\(\\(?:.\\|\n\\)*?\\)\n?```\\'" s)
+      (setq s (string-trim (match-string 1 s))))
+    s))
+
+(defun whisper-dvr--llm-write-temp (content suffix)
+  "Write CONTENT to a private temporary file ending in SUFFIX.
+Return the file name."
+  (let ((file (with-file-modes #o600
+                (make-temp-file "whisper-dvr-llm-" nil suffix))))
+    (let ((coding-system-for-write 'utf-8-unix))
+      (write-region content nil file nil 'silent))
+    file))
+
+(defun whisper-dvr--llm-split-http-status (output)
+  "Split curl OUTPUT into (STATUS . BODY).
+The curl call appends the HTTP status code on a final line."
+  (if (string-match "\n?\\([0-9]\\{3\\}\\)[ \t\n]*\\'" output)
+      (cons (string-to-number (match-string 1 output))
+            (substring output 0 (match-beginning 0)))
+    (cons 0 output)))
+
+(defun whisper-dvr--llm-json-read (body)
+  "Parse the JSON string BODY into nested alists."
+  (let ((json-object-type 'alist)
+        (json-array-type 'vector)
+        (json-key-type 'symbol))
+    (json-read-from-string body)))
+
+(defun whisper-dvr--llm-error-message (data)
+  "Extract an error message from the parsed JSON DATA, or return nil."
+  (let ((err (and (listp data) (alist-get 'error data))))
+    (cond ((stringp err) err)
+          ((listp err) (alist-get 'message err)))))
+
+;;;; Response parsers
+
+(defun whisper-dvr--llm-parse-anthropic (output)
+  "Return the text from the Anthropic Messages API OUTPUT.
+Signal an error when the request failed."
+  (pcase-let* ((`(,status . ,body) (whisper-dvr--llm-split-http-status output))
+               (data (condition-case nil
+                         (whisper-dvr--llm-json-read body)
+                       (error nil))))
+    (when (or (null data) (>= status 400) (equal (alist-get 'type data) "error"))
+      (error "Anthropic API error (HTTP %d): %s" status
+             (or (whisper-dvr--llm-error-message data) (string-trim body))))
+    (mapconcat (lambda (block) (or (alist-get 'text block) ""))
+               (cl-remove-if-not (lambda (block)
+                                   (equal (alist-get 'type block) "text"))
+                                 (append (alist-get 'content data) nil))
+               "")))
+
+(defun whisper-dvr--llm-parse-openai (output)
+  "Return the text from the OpenAI-style chat completions OUTPUT.
+Signal an error when the request failed."
+  (pcase-let* ((`(,status . ,body) (whisper-dvr--llm-split-http-status output))
+               (data (condition-case nil
+                         (whisper-dvr--llm-json-read body)
+                       (error nil))))
+    (when (or (null data) (>= status 400) (alist-get 'error data))
+      (error "LLM server error (HTTP %d): %s" status
+             (or (whisper-dvr--llm-error-message data) (string-trim body))))
+    (let* ((choices (alist-get 'choices data))
+           (first (and (vectorp choices) (> (length choices) 0) (aref choices 0)))
+           (content (alist-get 'content (alist-get 'message first))))
+      (unless (stringp content)
+        (error "LLM server returned no message content"))
+      content)))
+
+;;;; Request specifications
+
+(defun whisper-dvr--llm-curl-command (url headers body)
+  "Return a spec plist for a curl POST of BODY to URL with HEADERS.
+HEADERS is a list of header strings.  BODY is a JSON string.  Both go
+through private temporary files so that the API key never appears on
+the process command line."
+  (let ((header-file (whisper-dvr--llm-write-temp
+                      (concat (mapconcat #'identity headers "\n") "\n") ".txt"))
+        (body-file (whisper-dvr--llm-write-temp body ".json")))
+    (list :command (list (whisper-dvr--llm-program whisper-dvr-llm-curl-program)
+                         "-sS" "-X" "POST"
+                         "--max-time" (number-to-string whisper-dvr-llm-timeout)
+                         "-H" (concat "@" header-file)
+                         "--data-binary" (concat "@" body-file)
+                         "-w" "\n%{http_code}"
+                         url)
+          :temp-files (list header-file body-file))))
+
+(defun whisper-dvr--llm-request-spec (transcript)
+  "Return the process spec that sends TRANSCRIPT to the current backend.
+The spec is a plist with the keys :command, :stdin, :parser,
+:temp-files, and :unset-env."
+  (pcase whisper-dvr-llm-backend
+    ('claude-code
+     (list :command (append (list (whisper-dvr--llm-program
+                                   whisper-dvr-llm-claude-program)
+                                  "-p" (format whisper-dvr-llm-claude-prompt
+                                               whisper-dvr-llm-skill-name))
+                            (when whisper-dvr-llm-model
+                              (list "--model" whisper-dvr-llm-model))
+                            (when whisper-dvr-llm-claude-embed-skill
+                              (list "--append-system-prompt"
+                                    (whisper-dvr--llm-instructions)))
+                            whisper-dvr-llm-claude-args)
+           :stdin transcript
+           :unset-env whisper-dvr-llm-claude-unset-env
+           :parser #'identity))
+    ('command
+     (let ((model (or (whisper-dvr--llm-model) "")))
+       (list :command (let ((cmd (mapcar (lambda (arg)
+                                           (replace-regexp-in-string
+                                            "%m" model arg t t))
+                                         whisper-dvr-llm-command)))
+                        (cons (whisper-dvr--llm-program (car cmd)) (cdr cmd)))
+             :stdin (concat (whisper-dvr--llm-instructions) "\n\n"
+                            (whisper-dvr--llm-user-message transcript))
+             :parser #'identity)))
+    ('anthropic
+     (let ((key (whisper-dvr--llm-api-key)))
+       (unless key
+         (user-error "No Anthropic API key; set `whisper-dvr-llm-api-key' or ANTHROPIC_API_KEY"))
+       (append
+        (whisper-dvr--llm-curl-command
+         (whisper-dvr--llm-api-url)
+         (list "content-type: application/json"
+               "anthropic-version: 2023-06-01"
+               (concat "x-api-key: " key))
+         (json-encode
+          `((model . ,(whisper-dvr--llm-model))
+            (max_tokens . ,whisper-dvr-llm-max-tokens)
+            ,@(when whisper-dvr-llm-temperature
+                `((temperature . ,whisper-dvr-llm-temperature)))
+            (system . ,(whisper-dvr--llm-instructions))
+            (messages . [((role . "user")
+                          (content . ,(whisper-dvr--llm-user-message
+                                       transcript)))]))))
+        (list :parser #'whisper-dvr--llm-parse-anthropic))))
+    ('openai-compatible
+     (let ((key (whisper-dvr--llm-api-key))
+           (model (whisper-dvr--llm-model)))
+       (unless model
+         (user-error "Set `whisper-dvr-llm-model' to the name of a model on the server"))
+       (append
+        (whisper-dvr--llm-curl-command
+         (whisper-dvr--llm-api-url)
+         (append (list "Content-Type: application/json")
+                 (when key (list (concat "Authorization: Bearer " key))))
+         (json-encode
+          `((model . ,model)
+            (max_tokens . ,whisper-dvr-llm-max-tokens)
+            ,@(when whisper-dvr-llm-temperature
+                `((temperature . ,whisper-dvr-llm-temperature)))
+            (stream . :json-false)
+            (messages . [((role . "system")
+                          (content . ,(whisper-dvr--llm-instructions)))
+                         ((role . "user")
+                          (content . ,(whisper-dvr--llm-user-message
+                                       transcript)))]))))
+        (list :parser #'whisper-dvr--llm-parse-openai))))
+    (other (user-error "Unknown `whisper-dvr-llm-backend': %S" other))))
+
+(defun whisper-dvr--llm-backend-problem ()
+  "Return a string that describes why the backend cannot run, or nil."
+  (pcase whisper-dvr-llm-backend
+    ('claude-code
+     (unless (whisper-dvr--llm-executable-p whisper-dvr-llm-claude-program)
+       (format "Cannot find the Claude Code program `%s'"
+               whisper-dvr-llm-claude-program)))
+    ('command
+     (let ((prog (car whisper-dvr-llm-command)))
+       (unless (and prog (whisper-dvr--llm-executable-p prog))
+         (format "Cannot find the command `%s'" prog))))
+    ((or 'anthropic 'openai-compatible)
+     (cond ((not (whisper-dvr--llm-executable-p whisper-dvr-llm-curl-program))
+            (format "Cannot find `%s'" whisper-dvr-llm-curl-program))
+           ((and (eq whisper-dvr-llm-backend 'anthropic)
+                 (not (whisper-dvr--llm-api-key)))
+            "No Anthropic API key is available")
+           ((not (whisper-dvr--llm-model))
+            "No model is configured")))
+    ('function
+     (unless (functionp whisper-dvr-llm-function)
+       "`whisper-dvr-llm-function' is not a function"))
+    (other (format "Unknown backend %S" other))))
+
+;;;; Process management
+
+(defun whisper-dvr--llm-finish (job ok payload)
+  "Finish JOB exactly once and report the outcome.
+The callback of JOB receives PAYLOAD when OK is non-nil, and the errback
+receives it otherwise.  PAYLOAD is the processed text or the error message."
+  (unless (whisper-dvr--llm-job-done job)
+    (setf (whisper-dvr--llm-job-done job) t)
+    ;; The done flag is set first, so the sentinel that fires when the
+    ;; process is deleted here ignores this job.
+    (let ((proc (whisper-dvr--llm-job-process job)))
+      (when (process-live-p proc) (delete-process proc)))
+    (setq whisper-dvr--llm-jobs (delq job whisper-dvr--llm-jobs))
+    (when (whisper-dvr--llm-job-timer job)
+      (cancel-timer (whisper-dvr--llm-job-timer job)))
+    (dolist (file (whisper-dvr--llm-job-temp-files job))
+      (ignore-errors (delete-file file)))
+    (dolist (buf (list (whisper-dvr--llm-job-stdout job)
+                       (whisper-dvr--llm-job-stderr job)))
+      (when (buffer-live-p buf) (kill-buffer buf)))
+    (if ok
+        (funcall (whisper-dvr--llm-job-callback job) payload)
+      (funcall (whisper-dvr--llm-job-errback job) payload))))
+
+(defun whisper-dvr--llm-sentinel (job)
+  "Return a process sentinel that completes JOB."
+  (lambda (proc _event)
+    (when (and (memq (process-status proc) '(exit signal))
+               (not (whisper-dvr--llm-job-done job)))
+      (let* ((code (process-exit-status proc))
+             (out (with-current-buffer (whisper-dvr--llm-job-stdout job)
+                    (buffer-string)))
+             (err (let ((buf (whisper-dvr--llm-job-stderr job)))
+                    (if (buffer-live-p buf)
+                        (with-current-buffer buf (string-trim (buffer-string)))
+                      ""))))
+        (whisper-dvr--llm-log proc code err out)
+        (if (and (eq (process-status proc) 'exit) (zerop code))
+            (condition-case e
+                (let ((text (whisper-dvr--llm-clean-response
+                             (funcall (whisper-dvr--llm-job-parser job) out))))
+                  (if (string-empty-p text)
+                      (whisper-dvr--llm-finish job nil "the LLM returned empty text")
+                    (whisper-dvr--llm-finish job t text)))
+              (error (whisper-dvr--llm-finish job nil (error-message-string e))))
+          (whisper-dvr--llm-finish
+           job nil
+           (format "%s exited with code %d: %s"
+                   (car (process-command proc)) code
+                   (whisper-dvr--llm-failure-detail err out))))))))
+
+(defun whisper-dvr--llm-failure-detail (err out)
+  "Return the most useful explanation from stderr ERR and stdout OUT.
+Claude Code in print mode writes many of its own errors, such as an
+expired login, to standard output, so OUT is consulted when ERR is
+empty."
+  (let ((detail (string-trim (if (string-empty-p err) out err))))
+    (cond ((string-empty-p detail)
+           "no output; see M-x whisper-dvr-llm-show-log")
+          ((> (length detail) 300)
+           (concat (substring detail 0 300) "..."))
+          (t detail))))
+
+(defconst whisper-dvr--llm-log-buffer-name "*whisper-dvr-llm-log*"
+  "Name of the buffer that records each LLM process run.")
+
+(defun whisper-dvr--llm-log (proc code err out)
+  "Record the command of PROC, exit CODE, stderr ERR, and stdout OUT.
+Long arguments are shortened, and the API key never appears because it
+travels in a temporary header file."
+  (with-current-buffer (get-buffer-create whisper-dvr--llm-log-buffer-name)
+    (let ((inhibit-read-only t)
+          (clip (lambda (s n)
+                  (if (> (length s) n)
+                      (concat (substring s 0 n)
+                              (format "... [%d more chars]" (- (length s) n)))
+                    s))))
+      (goto-char (point-max))
+      (insert (format-time-string "==== %Y-%m-%d %H:%M:%S ====\n")
+              "directory: " default-directory "\n"
+              "command: "
+              (mapconcat (lambda (arg)
+                           (shell-quote-argument (funcall clip arg 200)))
+                         (process-command proc) " ")
+              "\n"
+              (format "exit code: %d\n" code)
+              "--- stderr ---\n" (funcall clip err 4000) "\n"
+              "--- stdout ---\n" (funcall clip out 4000) "\n\n")
+      ;; Keep the log from growing without bound.
+      (when (> (buffer-size) 200000)
+        (delete-region (point-min) (- (point-max) 100000))))))
+
+;;;###autoload
+(defun whisper-dvr-llm-show-log ()
+  "Display the log of the LLM processes started so far."
+  (interactive)
+  (display-buffer (get-buffer-create whisper-dvr--llm-log-buffer-name)))
+
+;;;###autoload
+(defun whisper-dvr-llm-test-backend ()
+  "Send a short sample transcript to the configured backend.
+The result, or the error, is reported in the echo area and in the
+buffer named by `whisper-dvr-llm-output-buffer-name'.  Use this command
+to check a new backend before transcribing a long recording."
+  (interactive)
+  (when-let* ((problem (whisper-dvr--llm-backend-problem)))
+    (user-error "%s" problem))
+  (whisper-dvr-llm-process-text
+   (concat "Okay so this is a test of the recorder. "
+           "I don't think the buffer setup is done yet, "
+           "so I need to email Bob about the crystallization screens tomorrow.")
+   (lambda (result)
+     (whisper-dvr--llm-show-in-buffer result)
+     (message "whisper-dvr: backend %s works" whisper-dvr-llm-backend))
+   (lambda (msg)
+     (whisper-dvr-llm-show-log)
+     (message "whisper-dvr: backend %s failed: %s" whisper-dvr-llm-backend msg))))
+
+(defun whisper-dvr--llm-start-process (spec callback errback)
+  "Start the process described by SPEC and return its job.
+CALLBACK receives the processed text.  ERRBACK receives an error
+message.  SPEC is a plist from `whisper-dvr--llm-request-spec'."
+  (let ((command (plist-get spec :command)))
+    (unless (whisper-dvr--llm-executable-p (car command))
+      (dolist (file (plist-get spec :temp-files))
+        (ignore-errors (delete-file file)))
+      (user-error "Cannot find `%s'" (car command))))
+  (let* ((command (plist-get spec :command))
+         (stdout (generate-new-buffer " *whisper-dvr-llm-stdout*"))
+         (stderr (generate-new-buffer " *whisper-dvr-llm-stderr*"))
+         (job (whisper-dvr--llm-job-create
+               :stdout stdout :stderr stderr
+               :temp-files (plist-get spec :temp-files)
+               :parser (or (plist-get spec :parser) #'identity)
+               :callback callback :errback errback)))
+    (let* ((process-environment
+            ;; A bare NAME without "=" unsets that variable for the child.
+            (append (plist-get spec :unset-env) process-environment))
+           (proc (make-process :name "whisper-dvr-llm"
+                              :buffer stdout
+                              :stderr stderr
+                              :command command
+                              :coding 'utf-8-unix
+                              :connection-type 'pipe
+                              :noquery t
+                              :sentinel #'ignore)))
+      (setf (whisper-dvr--llm-job-process job) proc)
+      ;; The stderr pipe would otherwise log its own status lines.
+      (when-let* ((errproc (get-buffer-process stderr)))
+        (set-process-sentinel errproc #'ignore))
+      (set-process-sentinel proc (whisper-dvr--llm-sentinel job))
+      (setf (whisper-dvr--llm-job-timer job)
+            (run-with-timer whisper-dvr-llm-timeout nil
+                            (lambda ()
+                              (whisper-dvr--llm-finish
+                               job nil
+                               (format "timed out after %d seconds"
+                                       whisper-dvr-llm-timeout)))))
+      (push job whisper-dvr--llm-jobs)
+      (when-let* ((input (plist-get spec :stdin)))
+        (process-send-string proc input))
+      (process-send-eof proc)
+      job)))
+
+(defun whisper-dvr-llm-process-text (text callback &optional errback)
+  "Send TEXT to the configured LLM backend in the background.
+CALLBACK is called with the processed text.  ERRBACK, when given, is
+called with an error message, otherwise the error is shown with
+`message'.  The return value is the job record, or nil for the
+`function' backend."
+  (when (string-blank-p text)
+    (user-error "There is no transcript text to process"))
+  (let* ((finished nil)
+         (user-callback callback)
+         (user-errback (or errback
+                           (lambda (msg)
+                             (message "whisper-dvr: LLM post-processing failed: %s"
+                                      msg))))
+         (callback (lambda (result)
+                     (setq finished t)
+                     (funcall user-callback result)))
+         (errback (lambda (msg)
+                    (setq finished t)
+                    (funcall user-errback msg))))
+    (whisper-dvr--llm-show-wait-message)
+    ;; whisper.el calls (message nil) right after its insert hook runs,
+    ;; which would erase the notice, so show it again a moment later.
+    (when whisper-dvr-llm-wait-message
+      (run-at-time 0.5 nil (lambda ()
+                             (unless finished
+                               (whisper-dvr--llm-show-wait-message)))))
+    (if (eq whisper-dvr-llm-backend 'function)
+        (progn
+          (unless (functionp whisper-dvr-llm-function)
+            (user-error "`whisper-dvr-llm-function' is not a function"))
+          (funcall whisper-dvr-llm-function
+                   (whisper-dvr--llm-instructions) text
+                   (lambda (result)
+                     (funcall callback (whisper-dvr--llm-clean-response result)))
+                   errback)
+          nil)
+      (whisper-dvr--llm-start-process
+       (whisper-dvr--llm-request-spec text) callback errback))))
+
+;;;; Delivering the result
+
+(defun whisper-dvr--llm-show-wait-message ()
+  "Show `whisper-dvr-llm-wait-message' in the echo area, if it is set."
+  (when whisper-dvr-llm-wait-message
+    (message "%s" whisper-dvr-llm-wait-message)))
+
+(defun whisper-dvr--llm-show-in-buffer (text)
+  "Insert TEXT into the LLM output buffer and display it.
+Return the buffer."
+  (let ((buf (get-buffer-create whisper-dvr-llm-output-buffer-name)))
+    (with-current-buffer buf
+      (let ((inhibit-read-only t))
+        (goto-char (point-max))
+        (unless (bobp) (insert "\n\n"))
+        (let ((start (point)))
+          (insert text "\n")
+          (when (and (fboundp 'latex-mode) (not (derived-mode-p 'tex-mode)))
+            (latex-mode))
+          (run-hook-with-args 'whisper-dvr-llm-after-process-hook start (point)))))
+    (display-buffer buf)
+    buf))
+
+(defun whisper-dvr--llm-deliver (buffer beg end raw result)
+  "Place RESULT in BUFFER according to `whisper-dvr-llm-insert-method'.
+BEG and END are markers around the RAW transcript in BUFFER.  The
+markers are released afterwards."
+  (unwind-protect
+      (let ((method whisper-dvr-llm-insert-method))
+        (if (or (eq method 'buffer)
+                (not (buffer-live-p buffer))
+                (with-current-buffer buffer buffer-read-only))
+            (whisper-dvr--llm-show-in-buffer result)
+          (with-current-buffer buffer
+            (when (and (eq method 'replace)
+                       (not (string= raw (buffer-substring-no-properties beg end))))
+              (message "whisper-dvr: raw transcript was edited; inserting result after it")
+              (setq method 'append))
+            (save-excursion
+              (let (start)
+                (if (eq method 'replace)
+                    (progn
+                      (goto-char beg)
+                      (delete-region beg end)
+                      (setq start (point)))
+                  (goto-char end)
+                  (insert "\n\n")
+                  (setq start (point)))
+                (insert result)
+                (run-hook-with-args 'whisper-dvr-llm-after-process-hook
+                                    start (point)))))
+          (message "whisper-dvr: transcript post-processed in %s"
+                   (buffer-name buffer))))
+    (set-marker beg nil)
+    (set-marker end nil)))
+
+(defun whisper-dvr--llm-process-region-async (buffer beg end)
+  "Post-process the text between BEG and END in BUFFER in the background.
+BEG and END are positions or markers."
+  (with-current-buffer buffer
+    (let* ((raw (buffer-substring-no-properties beg end))
+           (mbeg (copy-marker beg t))
+           (mend (copy-marker end nil)))
+      (condition-case err
+          (whisper-dvr-llm-process-text
+           raw
+           (lambda (result)
+             (whisper-dvr--llm-deliver buffer mbeg mend raw result))
+           (lambda (msg)
+             (set-marker mbeg nil)
+             (set-marker mend nil)
+             (message "whisper-dvr: LLM post-processing failed, raw transcript kept: %s"
+                      msg)))
+        (error
+         (set-marker mbeg nil)
+         (set-marker mend nil)
+         (signal (car err) (cdr err)))))))
+
+;;;; Integration with whisper.el
+
+(defun whisper-dvr--llm-arm (audio-file)
+  "Prepare LLM post-processing for the transcript of AUDIO-FILE.
+Return non-nil when post-processing was armed.  When the backend cannot
+run, warn and return nil so that the plain transcription proceeds."
+  (let ((problem (whisper-dvr--llm-backend-problem)))
+    (if problem
+        (progn
+          (display-warning 'whisper-dvr
+                           (format "LLM post-processing skipped: %s" problem))
+          nil)
+      (setq whisper-dvr--llm-armed-file (expand-file-name audio-file)
+            whisper-dvr--llm-captured nil)
+      (add-hook 'whisper-after-transcription-hook
+                #'whisper-dvr--llm-capture-transcript 90)
+      (add-hook 'whisper-after-insert-hook #'whisper-dvr--llm-after-insert)
+      t)))
+
+(defun whisper-dvr--llm-disarm ()
+  "Remove the whisper.el hooks and clear the armed state."
+  (remove-hook 'whisper-after-transcription-hook
+               #'whisper-dvr--llm-capture-transcript)
+  (remove-hook 'whisper-after-insert-hook #'whisper-dvr--llm-after-insert)
+  (setq whisper-dvr--llm-armed-file nil
+        whisper-dvr--llm-captured nil))
+
+(defun whisper-dvr--llm-armed-for-current-run-p ()
+  "Return non-nil when the running whisper job is the armed one.
+This check keeps an abandoned arm from capturing an unrelated dictation."
+  (and whisper-dvr--llm-armed-file
+       (boundp 'whisper--ffmpeg-input-file)
+       (stringp (default-value 'whisper--ffmpeg-input-file))
+       (string= (expand-file-name (default-value 'whisper--ffmpeg-input-file))
+                whisper-dvr--llm-armed-file)))
+
+(defun whisper-dvr--llm-capture-transcript ()
+  "Record the finished raw transcript and its insertion point.
+This function runs from `whisper-after-transcription-hook' in the
+whisper output buffer."
+  (if (not (whisper-dvr--llm-armed-for-current-run-p))
+      (whisper-dvr--llm-disarm)
+    (setq whisper-dvr--llm-captured
+          (cons (and (boundp 'whisper--marker)
+                     (markerp whisper--marker)
+                     (marker-buffer whisper--marker)
+                     (copy-marker whisper--marker))
+                (buffer-substring-no-properties (point-min) (point-max))))))
+
+(defun whisper-dvr--llm-after-insert ()
+  "Start LLM post-processing of the transcript whisper.el just inserted.
+This function runs from `whisper-after-insert-hook' in the buffer that
+received the text."
+  (let ((captured whisper-dvr--llm-captured))
+    (whisper-dvr--llm-disarm)
+    (when captured
+      (condition-case err
+          (whisper-dvr--llm-dispatch-captured captured)
+        (error
+         (message "whisper-dvr: LLM post-processing not started: %s"
+                  (error-message-string err)))))))
+
+(defun whisper-dvr--llm-dispatch-captured (captured)
+  "Start post-processing for CAPTURED, a cons of (START . RAW).
+The current buffer is the one that received the raw transcript."
+  (let* ((start (car captured))
+         (raw (cdr captured))
+         (len (length raw)))
+    (unwind-protect
+        (cond
+         ;; Text inserted at point, the usual case.
+         ((and start
+               (eq (marker-buffer start) (current-buffer))
+               (<= (+ start len) (point-max))
+               (string= raw (buffer-substring-no-properties
+                             start (+ start len))))
+          (whisper-dvr--llm-process-region-async
+           (current-buffer) (marker-position start) (+ start len)))
+         ;; Text sent to a separate transcription buffer.
+         ((and (boundp 'whisper-insert-text-at-point)
+               (not (symbol-value 'whisper-insert-text-at-point)))
+          (whisper-dvr--llm-process-region-async
+           (current-buffer) (point-min) (point-max)))
+         ;; The inserted text cannot be located, so show the result apart.
+         (t
+          (whisper-dvr-llm-process-text raw #'whisper-dvr--llm-show-in-buffer)))
+      (when (markerp start) (set-marker start nil)))))
+
+;;;; Commands
+
+;;;###autoload
+(defun whisper-dvr-llm-process-region (beg end)
+  "Post-process the transcript between BEG and END with the LLM.
+Without an active region the whole buffer is processed.  The result
+is placed according to `whisper-dvr-llm-insert-method'."
+  (interactive
+   (if (use-region-p)
+       (list (region-beginning) (region-end))
+     (list (point-min) (point-max))))
+  (whisper-dvr--llm-process-region-async (current-buffer) beg end))
+
+;;;###autoload
+(defun whisper-dvr-llm-process-file (file &optional open)
+  "Post-process the transcript in FILE and write FILE_parsed.tex beside it.
+For example notes.txt yields notes_parsed.tex, which matches the
+convention of the transcript-parser skill.  With prefix argument OPEN,
+visit the new file when it is ready."
+  (interactive "fTranscript file: \nP")
+  (let* ((path (expand-file-name file))
+         (out (whisper-dvr-llm-parsed-file-name path))
+         (text (with-temp-buffer
+                 (insert-file-contents path)
+                 (buffer-string))))
+    (whisper-dvr-llm-process-text
+     text
+     (lambda (result)
+       (let ((coding-system-for-write 'utf-8-unix))
+         (write-region (concat result "\n") nil out nil 'silent))
+       (message "whisper-dvr: wrote %s" out)
+       (when open (find-file out))))
+    out))
+
+(defun whisper-dvr-llm-parsed-file-name (file)
+  "Return the name of the parsed LaTeX file that corresponds to FILE."
+  (concat (file-name-sans-extension file) "_parsed.tex"))
+
+;;;###autoload
+(defun whisper-dvr-toggle-llm-postprocess ()
+  "Toggle LLM post-processing of new transcripts."
+  (interactive)
+  (setq whisper-dvr-llm-postprocess (not whisper-dvr-llm-postprocess))
+  (message "whisper-dvr LLM post-processing %s (backend %s)"
+           (if whisper-dvr-llm-postprocess "enabled" "disabled")
+           whisper-dvr-llm-backend))
+
+;;;###autoload
+(defun whisper-dvr-llm-select-backend (backend &optional model)
+  "Set the LLM BACKEND and, optionally, the MODEL for this session.
+An empty model name keeps the backend default."
+  (interactive
+   (let* ((choice (intern (completing-read
+                           "LLM backend: "
+                           '("claude-code" "anthropic" "openai-compatible"
+                             "command" "function")
+                           nil t nil nil (symbol-name whisper-dvr-llm-backend))))
+          (model (read-string "Model (empty for the default): "
+                              nil nil whisper-dvr-llm-model)))
+     (list choice model)))
+  (setq whisper-dvr-llm-backend backend
+        whisper-dvr-llm-model (and model (not (string-empty-p model)) model))
+  (message "whisper-dvr LLM backend is %s, model %s"
+           backend (or (whisper-dvr--llm-model) "default")))
+
+;;;###autoload
+(defun whisper-dvr-llm-cancel ()
+  "Cancel every running LLM post-processing request.
+The raw transcripts stay in place."
+  (interactive)
+  (let ((count (length whisper-dvr--llm-jobs)))
+    (dolist (job (copy-sequence whisper-dvr--llm-jobs))
+      (whisper-dvr--llm-finish job nil "cancelled"))
+    (whisper-dvr--llm-disarm)
+    (message "whisper-dvr: cancelled %d LLM request(s)" count)))
 
 
 ;;; Integration with existing whisper-dvr functions

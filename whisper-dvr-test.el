@@ -716,5 +716,618 @@
       (should (stringp result))
       (should (string-match-p "empty\\.mp3" result)))))
 
+;;; ============================================================
+;;; Unit Tests: LLM post-processing
+;;; ============================================================
+
+;; whisper.el internals that the hook integration reads.  The Makefile
+;; replaces whisper.el with a stub, so the tests define them here.
+(defvar whisper--ffmpeg-input-file nil)
+(defvar whisper--marker (make-marker))
+(defvar whisper-insert-text-at-point t)
+
+(defmacro whisper-dvr-test--with-llm-defaults (&rest body)
+  "Run BODY with LLM settings bound to predictable test values."
+  (declare (indent 0) (debug t))
+  `(let ((whisper-dvr-llm-postprocess nil)
+         (whisper-dvr-llm-backend 'claude-code)
+         (whisper-dvr-llm-model nil)
+         (whisper-dvr-llm-api-url nil)
+         (whisper-dvr-llm-api-key nil)
+         (whisper-dvr-llm-skill-name "transcript-parser")
+         (whisper-dvr-llm-skill-file "/nonexistent/SKILL.md")
+         (whisper-dvr-llm-claude-program "claude")
+         (whisper-dvr-llm-claude-args '("--output-format" "text"))
+         (whisper-dvr-llm-claude-embed-skill nil)
+         (whisper-dvr-llm-claude-unset-env '("ANTHROPIC_API_KEY"))
+         (whisper-dvr-llm-insert-method 'replace)
+         (whisper-dvr-llm-timeout 30)
+         (whisper-dvr-llm-temperature nil)
+         (whisper-dvr-llm-after-process-hook nil)
+         (whisper-dvr--llm-jobs nil)
+         (whisper-dvr--llm-armed-file nil)
+         (whisper-dvr--llm-captured nil)
+         (inhibit-message t))
+     (unwind-protect (progn ,@body)
+       (whisper-dvr--llm-disarm))))
+
+(defun whisper-dvr-test--sync-function-backend (transform)
+  "Return a `function' backend that applies TRANSFORM synchronously."
+  (lambda (_instructions text callback _errback)
+    (funcall callback (funcall transform text))))
+
+(defun whisper-dvr-test--wait-for-jobs (&optional seconds)
+  "Wait up to SECONDS for every LLM job to finish."
+  (let ((deadline (+ (float-time) (or seconds 10))))
+    (while (and whisper-dvr--llm-jobs (< (float-time) deadline))
+      (accept-process-output nil 0.05))))
+
+(ert-deftest whisper-dvr-test-llm-defaults ()
+  "Test that LLM post-processing is opt-in with sensible defaults."
+  (should (memq (default-value 'whisper-dvr-llm-postprocess) '(nil t)))
+  (should (eq (eval (car (get 'whisper-dvr-llm-postprocess 'standard-value))) nil))
+  (should (eq (eval (car (get 'whisper-dvr-llm-backend 'standard-value))) 'claude-code))
+  (should (eq (eval (car (get 'whisper-dvr-llm-insert-method 'standard-value))) 'replace))
+  (should (equal (eval (car (get 'whisper-dvr-llm-skill-name 'standard-value)))
+                 "transcript-parser")))
+
+(ert-deftest whisper-dvr-test-llm-model-falls-back-to-backend-default ()
+  "Test model resolution for each backend."
+  (whisper-dvr-test--with-llm-defaults
+    (let ((whisper-dvr-llm-backend 'anthropic))
+      (should (equal (whisper-dvr--llm-model) "claude-sonnet-5-5"))
+      (let ((whisper-dvr-llm-model "claude-opus-5-5"))
+        (should (equal (whisper-dvr--llm-model) "claude-opus-5-5"))))
+    (let ((whisper-dvr-llm-backend 'claude-code))
+      (should-not (whisper-dvr--llm-model)))))
+
+(ert-deftest whisper-dvr-test-llm-api-url-defaults ()
+  "Test default endpoints for the HTTP backends."
+  (whisper-dvr-test--with-llm-defaults
+    (let ((whisper-dvr-llm-backend 'anthropic))
+      (should (string-match-p "api\\.anthropic\\.com/v1/messages"
+                              (whisper-dvr--llm-api-url))))
+    (let ((whisper-dvr-llm-backend 'openai-compatible))
+      (should (string-match-p "localhost:11434/v1/chat/completions"
+                              (whisper-dvr--llm-api-url))))
+    (let ((whisper-dvr-llm-api-url "http://localhost:8080/v1/chat/completions"))
+      (should (string-match-p "8080" (whisper-dvr--llm-api-url))))))
+
+(ert-deftest whisper-dvr-test-llm-api-key-sources ()
+  "Test that the API key comes from a string, a function, or the environment."
+  (whisper-dvr-test--with-llm-defaults
+    (let ((whisper-dvr-llm-backend 'anthropic))
+      (let ((whisper-dvr-llm-api-key "sk-string"))
+        (should (equal (whisper-dvr--llm-api-key) "sk-string")))
+      (let ((whisper-dvr-llm-api-key (lambda () "sk-func")))
+        (should (equal (whisper-dvr--llm-api-key) "sk-func")))
+      (let ((process-environment (cons "ANTHROPIC_API_KEY=sk-env"
+                                       process-environment)))
+        (should (equal (whisper-dvr--llm-api-key) "sk-env"))))))
+
+(ert-deftest whisper-dvr-test-llm-strip-front-matter ()
+  "Test removal of YAML front matter from a skill file."
+  (should (equal (whisper-dvr--llm-strip-front-matter
+                  "---\nname: x\ndescription: y\n---\n# Body\n")
+                 "# Body\n"))
+  (should (equal (whisper-dvr--llm-strip-front-matter "# No front matter\n")
+                 "# No front matter\n")))
+
+(ert-deftest whisper-dvr-test-llm-instructions-prefer-skill-file ()
+  "Test that the skill file body becomes the instructions."
+  (let ((file (make-temp-file "skill" nil ".md"
+                              "---\nname: transcript-parser\n---\nSKILL BODY TEXT\n")))
+    (unwind-protect
+        (whisper-dvr-test--with-llm-defaults
+          (let ((whisper-dvr-llm-skill-file file))
+            (let ((text (whisper-dvr--llm-instructions)))
+              (should (string-prefix-p "SKILL BODY TEXT" text))
+              (should-not (string-match-p "name: transcript-parser" text))
+              (should (string-match-p "no code fences" text)))))
+      (delete-file file))))
+
+(ert-deftest whisper-dvr-test-llm-instructions-fallback ()
+  "Test the built-in instructions when the skill file is missing."
+  (whisper-dvr-test--with-llm-defaults
+    (let ((text (whisper-dvr--llm-instructions)))
+      (should (string-match-p "subsubsection" text))
+      (should (string-match-p "TODO Items" text)))))
+
+(ert-deftest whisper-dvr-test-llm-clean-response-strips-fences ()
+  "Test that a code fence around the whole response is removed."
+  (should (equal (whisper-dvr--llm-clean-response
+                  "```latex\n\\subsubsection{A}\nText.\n```\n")
+                 "\\subsubsection{A}\nText."))
+  (should (equal (whisper-dvr--llm-clean-response "  plain text \n")
+                 "plain text")))
+
+(ert-deftest whisper-dvr-test-llm-split-http-status ()
+  "Test splitting the curl status line from the body."
+  (should (equal (whisper-dvr--llm-split-http-status "{\"a\":1}\n200")
+                 '(200 . "{\"a\":1}")))
+  (should (equal (car (whisper-dvr--llm-split-http-status "no status")) 0)))
+
+(ert-deftest whisper-dvr-test-llm-parse-anthropic ()
+  "Test parsing a successful and a failed Anthropic response."
+  (should (equal (whisper-dvr--llm-parse-anthropic
+                  (concat "{\"type\":\"message\",\"content\":["
+                          "{\"type\":\"text\",\"text\":\"Hello \"},"
+                          "{\"type\":\"text\",\"text\":\"world\"}]}\n200"))
+                 "Hello world"))
+  (let ((err (should-error
+              (whisper-dvr--llm-parse-anthropic
+               (concat "{\"type\":\"error\",\"error\":{\"type\":\"authentication_error\","
+                       "\"message\":\"invalid x-api-key\"}}\n401")))))
+    (should (string-match-p "invalid x-api-key" (error-message-string err)))))
+
+(ert-deftest whisper-dvr-test-llm-parse-openai ()
+  "Test parsing a successful and a failed chat completions response."
+  (should (equal (whisper-dvr--llm-parse-openai
+                  (concat "{\"choices\":[{\"message\":{\"role\":\"assistant\","
+                          "\"content\":\"Parsed\"}}]}\n200"))
+                 "Parsed"))
+  (let ((err (should-error
+              (whisper-dvr--llm-parse-openai
+               "{\"error\":{\"message\":\"model not found\"}}\n404"))))
+    (should (string-match-p "model not found" (error-message-string err)))))
+
+(ert-deftest whisper-dvr-test-llm-spec-claude-code ()
+  "Test the command line for the Claude Code harness."
+  (whisper-dvr-test--with-llm-defaults
+    (let* ((whisper-dvr-llm-model "sonnet")
+           (spec (whisper-dvr--llm-request-spec "raw words"))
+           (cmd (plist-get spec :command)))
+      (should (equal (car cmd) "claude"))
+      (should (member "-p" cmd))
+      (should (string-match-p "transcript-parser" (nth 2 cmd)))
+      (should (equal (cadr (member "--model" cmd)) "sonnet"))
+      (should (member "--output-format" cmd))
+      (should-not (member "--append-system-prompt" cmd))
+      (should (equal (plist-get spec :stdin) "raw words")))))
+
+(ert-deftest whisper-dvr-test-llm-spec-claude-code-embed-skill ()
+  "Test that the skill text can be embedded for the harness."
+  (whisper-dvr-test--with-llm-defaults
+    (let* ((whisper-dvr-llm-claude-embed-skill t)
+           (cmd (plist-get (whisper-dvr--llm-request-spec "x") :command)))
+      (should (member "--append-system-prompt" cmd))
+      (should-not (member "--model" cmd)))))
+
+(ert-deftest whisper-dvr-test-llm-spec-command-substitutes-model ()
+  "Test the generic command backend for local models."
+  (whisper-dvr-test--with-llm-defaults
+    (let* ((whisper-dvr-llm-backend 'command)
+           (whisper-dvr-llm-model "qwen2.5:14b")
+           (whisper-dvr-llm-command '("ollama" "run" "%m"))
+           (spec (whisper-dvr--llm-request-spec "raw words")))
+      (should (equal (plist-get spec :command) '("ollama" "run" "qwen2.5:14b")))
+      (should (string-match-p "subsubsection" (plist-get spec :stdin)))
+      (should (string-match-p "<transcript>\nraw words\n</transcript>"
+                              (plist-get spec :stdin))))))
+
+(ert-deftest whisper-dvr-test-llm-spec-anthropic-keeps-key-off-command-line ()
+  "Test that the Anthropic request hides the key in a private file."
+  (whisper-dvr-test--with-llm-defaults
+    (let* ((whisper-dvr-llm-backend 'anthropic)
+           (whisper-dvr-llm-api-key "sk-secret")
+           (spec (whisper-dvr--llm-request-spec "raw words"))
+           (cmd (plist-get spec :command))
+           (files (plist-get spec :temp-files)))
+      (unwind-protect
+          (progn
+            (should (equal (car cmd) "curl"))
+            (should-not (cl-some (lambda (a) (string-match-p "sk-secret" a)) cmd))
+            (should (eq (plist-get spec :parser) #'whisper-dvr--llm-parse-anthropic))
+            (let ((headers (with-temp-buffer
+                             (insert-file-contents (nth 0 files)) (buffer-string)))
+                  (body (whisper-dvr--llm-json-read
+                         (with-temp-buffer
+                           (insert-file-contents (nth 1 files)) (buffer-string)))))
+              (should (string-match-p "x-api-key: sk-secret" headers))
+              (should (string-match-p "anthropic-version" headers))
+              (should (= (file-modes (nth 0 files)) #o600))
+              (should (equal (alist-get 'model body) "claude-sonnet-5-5"))
+              (should (stringp (alist-get 'system body)))
+              (should-not (assq 'temperature body))
+              (should (string-match-p "raw words"
+                                      (alist-get 'content
+                                                 (aref (alist-get 'messages body) 0))))))
+        (mapc #'delete-file files)))))
+
+(ert-deftest whisper-dvr-test-llm-spec-anthropic-requires-key ()
+  "Test the error when no Anthropic key is available."
+  (whisper-dvr-test--with-llm-defaults
+    (let ((whisper-dvr-llm-backend 'anthropic)
+          (process-environment (cons "ANTHROPIC_API_KEY" process-environment)))
+      (cl-letf (((symbol-function 'auth-source-pick-first-password) #'ignore))
+        (should-error (whisper-dvr--llm-request-spec "x") :type 'user-error)))))
+
+(ert-deftest whisper-dvr-test-llm-spec-openai-compatible-local ()
+  "Test a local OpenAI-compatible request without an API key."
+  (whisper-dvr-test--with-llm-defaults
+    (let* ((whisper-dvr-llm-backend 'openai-compatible)
+           (whisper-dvr-llm-model "llama3.1:8b")
+           (whisper-dvr-llm-temperature 0.2)
+           (process-environment (cons "OPENAI_API_KEY" process-environment)))
+      (cl-letf (((symbol-function 'auth-source-pick-first-password) #'ignore))
+        (let* ((spec (whisper-dvr--llm-request-spec "raw words"))
+               (files (plist-get spec :temp-files)))
+          (unwind-protect
+              (let ((headers (with-temp-buffer
+                               (insert-file-contents (nth 0 files)) (buffer-string)))
+                    (body (whisper-dvr--llm-json-read
+                           (with-temp-buffer
+                             (insert-file-contents (nth 1 files)) (buffer-string)))))
+                (should-not (string-match-p "Authorization" headers))
+                (should (equal (alist-get 'model body) "llama3.1:8b"))
+                (should (= (alist-get 'temperature body) 0.2))
+                (should (equal (alist-get 'role (aref (alist-get 'messages body) 0))
+                               "system"))
+                (should (string-match-p "localhost:11434"
+                                        (car (last (plist-get spec :command))))))
+            (mapc #'delete-file files)))))))
+
+(ert-deftest whisper-dvr-test-llm-backend-problem-missing-program ()
+  "Test that a missing executable is reported before transcription."
+  (whisper-dvr-test--with-llm-defaults
+    (let ((whisper-dvr-llm-claude-program "no-such-claude-program-xyz"))
+      (should (string-match-p "Cannot find" (whisper-dvr--llm-backend-problem))))
+    (let ((whisper-dvr-llm-backend 'function)
+          (whisper-dvr-llm-function nil))
+      (should (whisper-dvr--llm-backend-problem)))
+    (let ((whisper-dvr-llm-backend 'function)
+          (whisper-dvr-llm-function #'ignore))
+      (should-not (whisper-dvr--llm-backend-problem)))))
+
+(ert-deftest whisper-dvr-test-llm-arm-skips-when-backend-unavailable ()
+  "Test that arming warns and leaves the hooks alone on a broken backend."
+  (whisper-dvr-test--with-llm-defaults
+    (let ((whisper-dvr-llm-claude-program "no-such-claude-program-xyz"))
+      (cl-letf (((symbol-function 'display-warning) #'ignore))
+        (should-not (whisper-dvr--llm-arm "/tmp/a.mp3"))
+        (should-not (memq #'whisper-dvr--llm-after-insert
+                          (default-value 'whisper-after-insert-hook)))))))
+
+(ert-deftest whisper-dvr-test-llm-deliver-replace ()
+  "Test that the processed text replaces the raw transcript."
+  (whisper-dvr-test--with-llm-defaults
+    (with-temp-buffer
+      (insert "Before. raw text After.")
+      (let ((beg (copy-marker 9 t)) (end (copy-marker 17)))
+        (whisper-dvr--llm-deliver (current-buffer) beg end "raw text" "PARSED")
+        (should (equal (buffer-string) "Before. PARSED After."))
+        (should-not (marker-buffer beg))))))
+
+(ert-deftest whisper-dvr-test-llm-deliver-falls-back-to-append-after-edit ()
+  "Test that an edited raw transcript is never overwritten."
+  (whisper-dvr-test--with-llm-defaults
+    (with-temp-buffer
+      (insert "raw text")
+      (let ((beg (copy-marker 1 t)) (end (copy-marker 9)))
+        (goto-char 5) (insert "EDIT ")
+        (whisper-dvr--llm-deliver (current-buffer) beg end "raw text" "PARSED")
+        (should (equal (buffer-string) "raw EDIT text\n\nPARSED"))))))
+
+(ert-deftest whisper-dvr-test-llm-deliver-append ()
+  "Test the append insert method."
+  (whisper-dvr-test--with-llm-defaults
+    (let ((whisper-dvr-llm-insert-method 'append))
+      (with-temp-buffer
+        (insert "raw text")
+        (whisper-dvr--llm-deliver (current-buffer) (copy-marker 1 t)
+                                  (copy-marker 9) "raw text" "PARSED")
+        (should (equal (buffer-string) "raw text\n\nPARSED"))))))
+
+(ert-deftest whisper-dvr-test-llm-deliver-buffer ()
+  "Test the separate buffer insert method."
+  (whisper-dvr-test--with-llm-defaults
+    (let ((whisper-dvr-llm-insert-method 'buffer)
+          (whisper-dvr-llm-output-buffer-name " *whisper-dvr-llm-test*"))
+      (cl-letf (((symbol-function 'display-buffer) #'ignore))
+        (unwind-protect
+            (with-temp-buffer
+              (insert "raw text")
+              (whisper-dvr--llm-deliver (current-buffer) (copy-marker 1 t)
+                                        (copy-marker 9) "raw text" "PARSED")
+              (should (equal (buffer-string) "raw text"))
+              (should (string-match-p "PARSED"
+                                      (with-current-buffer
+                                          whisper-dvr-llm-output-buffer-name
+                                        (buffer-string)))))
+          (kill-buffer whisper-dvr-llm-output-buffer-name))))))
+
+(ert-deftest whisper-dvr-test-llm-after-process-hook-receives-bounds ()
+  "Test that the hook sees the bounds of the inserted result."
+  (whisper-dvr-test--with-llm-defaults
+    (let* ((seen nil)
+           (whisper-dvr-llm-after-process-hook
+            (list (lambda (b e) (setq seen (buffer-substring b e))))))
+      (with-temp-buffer
+        (insert "raw text")
+        (whisper-dvr--llm-deliver (current-buffer) (copy-marker 1 t)
+                                  (copy-marker 9) "raw text" "PARSED")
+        (should (equal seen "PARSED"))))))
+
+(ert-deftest whisper-dvr-test-llm-process-region-command-backend ()
+  "Test an end-to-end asynchronous run through a real subprocess."
+  (skip-unless (executable-find "sh"))
+  (whisper-dvr-test--with-llm-defaults
+    (let ((whisper-dvr-llm-backend 'command)
+          (whisper-dvr-llm-command
+           '("sh" "-c" "sed -n '/<transcript>/,/<\\/transcript>/p' | sed '1d;$d' | tr a-z A-Z")))
+      (with-temp-buffer
+        (insert "Intro.\nhello world\nOutro.")
+        (whisper-dvr-llm-process-region 8 19)
+        (whisper-dvr-test--wait-for-jobs)
+        (should (equal (buffer-string) "Intro.\nHELLO WORLD\nOutro."))))))
+
+(ert-deftest whisper-dvr-test-llm-claude-code-unsets-api-key ()
+  "Test that the harness runs without ANTHROPIC_API_KEY so the Max plan login is used."
+  (skip-unless (executable-find "sh"))
+  (let ((script (make-temp-file "fake-claude" nil ".sh"
+                                (concat "#!/bin/sh\n"
+                                        "cat >/dev/null\n"
+                                        "echo \"key=${ANTHROPIC_API_KEY:-unset}\"\n"))))
+    (unwind-protect
+        (progn
+          (set-file-modes script #o755)
+          (whisper-dvr-test--with-llm-defaults
+            (let ((whisper-dvr-llm-claude-program script)
+                  (process-environment (cons "ANTHROPIC_API_KEY=sk-should-not-leak"
+                                             process-environment))
+                  (result nil))
+              (should (equal (plist-get (whisper-dvr--llm-request-spec "x") :unset-env)
+                             '("ANTHROPIC_API_KEY")))
+              (whisper-dvr-llm-process-text "raw" (lambda (r) (setq result r)))
+              (whisper-dvr-test--wait-for-jobs)
+              (should (equal result "key=unset"))
+              ;; With the option cleared, the key reaches the harness.
+              (let ((whisper-dvr-llm-claude-unset-env nil))
+                (whisper-dvr-llm-process-text "raw" (lambda (r) (setq result r)))
+                (whisper-dvr-test--wait-for-jobs)
+                (should (equal result "key=sk-should-not-leak"))))))
+      (delete-file script))))
+
+(ert-deftest whisper-dvr-test-llm-claude-code-fake-harness ()
+  "Test the harness backend against a stand-in claude script."
+  (skip-unless (executable-find "sh"))
+  (let ((script (make-temp-file "fake-claude" nil ".sh"
+                                (concat "#!/bin/sh\n"
+                                        "cat >/dev/null\n"
+                                        "printf '```latex\\n\\\\subsubsection{Topic}\\n%s\\n```\\n' \"$2\" | head -c 2000\n"))))
+    (unwind-protect
+        (progn
+          (set-file-modes script #o755)
+          (whisper-dvr-test--with-llm-defaults
+            (let ((whisper-dvr-llm-claude-program script))
+              (with-temp-buffer
+                (insert "raw transcript")
+                (whisper-dvr-llm-process-region (point-min) (point-max))
+                (whisper-dvr-test--wait-for-jobs)
+                (should (string-prefix-p "\\subsubsection{Topic}" (buffer-string)))
+                (should (string-match-p "transcript-parser skill" (buffer-string)))
+                (should-not (string-match-p "```" (buffer-string)))))))
+      (delete-file script))))
+
+(ert-deftest whisper-dvr-test-llm-failure-keeps-raw-text ()
+  "Test that a failing backend leaves the raw transcript untouched."
+  (skip-unless (executable-find "sh"))
+  (whisper-dvr-test--with-llm-defaults
+    (let ((whisper-dvr-llm-backend 'command)
+          (whisper-dvr-llm-command '("sh" "-c" "cat >/dev/null; echo boom >&2; exit 3"))
+          (errors nil))
+      (with-temp-buffer
+        (insert "raw text")
+        (whisper-dvr-llm-process-text "raw text" #'ignore
+                                      (lambda (msg) (push msg errors)))
+        (whisper-dvr-test--wait-for-jobs)
+        (should (equal (buffer-string) "raw text"))
+        (should (string-match-p "code 3: boom" (car errors)))
+        (should (string-match-p "exit code: 3"
+                                (with-current-buffer "*whisper-dvr-llm-log*"
+                                  (buffer-string))))))))
+
+(ert-deftest whisper-dvr-test-llm-failure-reports-stdout-when-stderr-empty ()
+  "Test that an error printed on stdout, as Claude Code does, is reported."
+  (skip-unless (executable-find "sh"))
+  (whisper-dvr-test--with-llm-defaults
+    (let ((whisper-dvr-llm-backend 'command)
+          (whisper-dvr-llm-command
+           '("sh" "-c" "cat >/dev/null; echo 'Invalid API key. Please run /login'; exit 1"))
+          (errors nil))
+      (whisper-dvr-llm-process-text "raw" #'ignore (lambda (m) (push m errors)))
+      (whisper-dvr-test--wait-for-jobs)
+      (should (string-match-p "code 1: Invalid API key" (car errors))))))
+
+(ert-deftest whisper-dvr-test-llm-failure-detail-truncates ()
+  "Test the choice and truncation of the failure detail."
+  (should (equal (whisper-dvr--llm-failure-detail "err" "out") "err"))
+  (should (equal (whisper-dvr--llm-failure-detail "" " out ") "out"))
+  (should (string-match-p "show-log" (whisper-dvr--llm-failure-detail "" "")))
+  (should (= (length (whisper-dvr--llm-failure-detail (make-string 500 ?x) ""))
+             303)))
+
+(ert-deftest whisper-dvr-test-llm-timeout ()
+  "Test that a stalled backend is abandoned after the timeout."
+  (skip-unless (executable-find "sh"))
+  (whisper-dvr-test--with-llm-defaults
+    (let ((whisper-dvr-llm-backend 'command)
+          (whisper-dvr-llm-command '("sh" "-c" "sleep 10"))
+          (whisper-dvr-llm-timeout 1)
+          (errors nil))
+      (whisper-dvr-llm-process-text "raw" #'ignore (lambda (m) (push m errors)))
+      (whisper-dvr-test--wait-for-jobs 5)
+      (should (string-match-p "timed out" (car errors)))
+      (should-not whisper-dvr--llm-jobs))))
+
+(ert-deftest whisper-dvr-test-llm-cancel ()
+  "Test that cancel stops running jobs and reports them."
+  (skip-unless (executable-find "sh"))
+  (whisper-dvr-test--with-llm-defaults
+    (let ((whisper-dvr-llm-backend 'command)
+          (whisper-dvr-llm-command '("sh" "-c" "sleep 10"))
+          (errors nil))
+      (whisper-dvr-llm-process-text "raw" #'ignore (lambda (m) (push m errors)))
+      (should (= (length whisper-dvr--llm-jobs) 1))
+      (whisper-dvr-llm-cancel)
+      (should-not whisper-dvr--llm-jobs)
+      (should (equal errors '("cancelled"))))))
+
+(ert-deftest whisper-dvr-test-llm-whisper-hook-flow ()
+  "Test capture and replacement through the whisper.el hooks."
+  (whisper-dvr-test--with-llm-defaults
+    (let ((whisper-dvr-llm-backend 'function)
+          (whisper-dvr-llm-function
+           (whisper-dvr-test--sync-function-backend
+            (lambda (text) (concat "\\subsubsection{Notes}\n" (upcase text))))))
+      (with-temp-buffer
+        (insert "Header line.\n")
+        (should (whisper-dvr--llm-arm "/tmp/rec.mp3"))
+        (should (memq #'whisper-dvr--llm-capture-transcript
+                      (default-value 'whisper-after-transcription-hook)))
+        (setq-default whisper--ffmpeg-input-file "/tmp/rec.mp3")
+        (setq whisper--marker (point-marker))
+        (let ((target (current-buffer)))
+          ;; Simulate the whisper output buffer.
+          (with-temp-buffer
+            (insert "spoken words")
+            (run-hooks 'whisper-after-transcription-hook))
+          ;; Simulate whisper inserting the text at the marker.
+          (with-current-buffer target
+            (save-excursion (goto-char whisper--marker) (insert "spoken words"))
+            (run-hooks 'whisper-after-insert-hook)
+            (should (equal (buffer-string)
+                           "Header line.\n\\subsubsection{Notes}\nSPOKEN WORDS"))))
+        (should-not (memq #'whisper-dvr--llm-after-insert
+                          (default-value 'whisper-after-insert-hook)))
+        (should-not whisper-dvr--llm-armed-file)))
+    (setq-default whisper--ffmpeg-input-file nil)))
+
+(ert-deftest whisper-dvr-test-llm-ignores-unrelated-transcription ()
+  "Test that a stale arm does not capture a different recording."
+  (whisper-dvr-test--with-llm-defaults
+    (let ((whisper-dvr-llm-backend 'function)
+          (whisper-dvr-llm-function (whisper-dvr-test--sync-function-backend #'upcase)))
+      (whisper-dvr--llm-arm "/tmp/rec.mp3")
+      (setq-default whisper--ffmpeg-input-file nil)
+      (with-temp-buffer
+        (insert "dictation")
+        (run-hooks 'whisper-after-transcription-hook))
+      (should-not whisper-dvr--llm-captured)
+      (should-not whisper-dvr--llm-armed-file))))
+
+(ert-deftest whisper-dvr-test-llm-whisper-dvr-prefix-toggles ()
+  "Test that a prefix argument inverts the post-processing setting."
+  (whisper-dvr-test--with-llm-defaults
+    (let ((armed nil)
+          (whisper-dvr-directory "/test/dir"))
+      (cl-letf (((symbol-function 'whisper-dvr--list-audio-files)
+                 (lambda () '("/test/dir/a.mp3")))
+                ((symbol-function 'whisper-dvr--format-file-entry)
+                 (lambda (f) (file-name-nondirectory f)))
+                ((symbol-function 'completing-read) (lambda (&rest _) "a.mp3"))
+                ((symbol-function 'buffer-file-name) (lambda (&rest _) "/x.tex"))
+                ((symbol-function 'whisper-run) #'ignore)
+                ((symbol-function 'whisper-dvr--llm-arm)
+                 (lambda (f) (setq armed f))))
+        (whisper-dvr)
+        (should-not armed)
+        (whisper-dvr '(4))
+        (should (equal armed "/test/dir/a.mp3"))
+        (setq armed nil)
+        (let ((whisper-dvr-llm-postprocess t))
+          (whisper-dvr)
+          (should armed)
+          (setq armed nil)
+          (whisper-dvr '(4))
+          (should-not armed))))))
+
+(ert-deftest whisper-dvr-test-llm-process-file-writes-parsed-tex ()
+  "Test that a transcript file yields a _parsed.tex file beside it."
+  (whisper-dvr-test--with-llm-defaults
+    (let* ((dir (make-temp-file "wdvr" t))
+           (file (expand-file-name "notes.txt" dir))
+           (whisper-dvr-llm-backend 'function)
+           (whisper-dvr-llm-function (whisper-dvr-test--sync-function-backend #'upcase)))
+      (unwind-protect
+          (progn
+            (with-temp-file file (insert "meeting notes"))
+            (should (equal (whisper-dvr-llm-process-file file)
+                           (expand-file-name "notes_parsed.tex" dir)))
+            (should (equal (with-temp-buffer
+                             (insert-file-contents
+                              (expand-file-name "notes_parsed.tex" dir))
+                             (buffer-string))
+                           "MEETING NOTES\n")))
+        (delete-directory dir t)))))
+
+(ert-deftest whisper-dvr-test-llm-toggle-and-select-backend ()
+  "Test the interactive toggle and backend selection commands."
+  (whisper-dvr-test--with-llm-defaults
+    (whisper-dvr-toggle-llm-postprocess)
+    (should whisper-dvr-llm-postprocess)
+    (whisper-dvr-toggle-llm-postprocess)
+    (should-not whisper-dvr-llm-postprocess)
+    (whisper-dvr-llm-select-backend 'openai-compatible "qwen2.5:14b")
+    (should (eq whisper-dvr-llm-backend 'openai-compatible))
+    (should (equal whisper-dvr-llm-model "qwen2.5:14b"))
+    (whisper-dvr-llm-select-backend 'anthropic "")
+    (should-not whisper-dvr-llm-model)))
+
+(ert-deftest whisper-dvr-test-llm-wait-message-shown-while-working ()
+  "Test that the wait message appears at once and again after whisper clears it."
+  (skip-unless (executable-find "sh"))
+  (whisper-dvr-test--with-llm-defaults
+    (let ((whisper-dvr-llm-backend 'command)
+          (whisper-dvr-llm-command '("sh" "-c" "cat >/dev/null; sleep 1; echo done"))
+          (shown 0))
+      (cl-letf* ((orig (symbol-function 'message))
+                 ((symbol-function 'message)
+                  (lambda (fmt &rest args)
+                    (when (and fmt (string-prefix-p "Please wait, the LLM is parsing"
+                                                    (apply #'format fmt args)))
+                      (setq shown (1+ shown)))
+                    (apply orig fmt args))))
+        (whisper-dvr-llm-process-text "raw" #'ignore)
+        (should (= shown 1))
+        (whisper-dvr-test--wait-for-jobs)
+        (should (= shown 2))))))
+
+(ert-deftest whisper-dvr-test-llm-wait-message-not-repeated-after-finish ()
+  "Test that a fast backend does not leave a stale wait message."
+  (whisper-dvr-test--with-llm-defaults
+    (let ((whisper-dvr-llm-backend 'function)
+          (whisper-dvr-llm-function (whisper-dvr-test--sync-function-backend #'upcase))
+          (shown 0))
+      (cl-letf (((symbol-function 'message)
+                 (lambda (fmt &rest args)
+                   (when (and fmt (string-prefix-p "Please wait"
+                                                   (apply #'format fmt args)))
+                     (setq shown (1+ shown))))))
+        (whisper-dvr-llm-process-text "raw" #'ignore)
+        (sleep-for 0.7)
+        (should (= shown 1))))))
+
+(ert-deftest whisper-dvr-test-llm-wait-message-can-be-disabled ()
+  "Test that a nil wait message shows nothing."
+  (whisper-dvr-test--with-llm-defaults
+    (let ((whisper-dvr-llm-wait-message nil)
+          (whisper-dvr-llm-backend 'function)
+          (whisper-dvr-llm-function (whisper-dvr-test--sync-function-backend #'upcase))
+          (shown 0))
+      (cl-letf (((symbol-function 'message)
+                 (lambda (fmt &rest args)
+                   (when (and fmt (string-prefix-p "Please wait"
+                                                   (apply #'format fmt args)))
+                     (setq shown (1+ shown))))))
+        (whisper-dvr-llm-process-text "raw" #'ignore)
+        (sleep-for 0.7)
+        (should (= shown 0))))))
+
+(ert-deftest whisper-dvr-test-llm-rejects-empty-transcript ()
+  "Test that blank text is refused before any process starts."
+  (whisper-dvr-test--with-llm-defaults
+    (should-error (whisper-dvr-llm-process-text "  \n" #'ignore) :type 'user-error)))
+
 (provide 'whisper-dvr-test)
 ;;; whisper-dvr-test.el ends here

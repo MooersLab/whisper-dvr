@@ -1,17 +1,25 @@
-![Version](https://img.shields.io/static/v1?label=whisper-dvr&message=0.5&color=brightcolor)
+![Version](https://img.shields.io/static/v1?label=whisper-dvr&message=0.6&color=brightcolor)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Emacs](https://img.shields.io/badge/Emacs-27.1+-purple.svg)](https://www.gnu.org/software/emacs/)
 
 # whisper-dvr
-Transcribe audio files from digital voice recorders (DVR) directly in Emacs using [whisper.el](https://github.com/natruj/whisper.el).
+Transcribe audio files from digital voice recorders (DVR) directly in Emacs using [whisper.el](https://github.com/natrys/whisper.el).
 I use this Elisp package twice a day after each commute.
 I use this package with a Sony IC Recorder (https://rd1.sony.net/help/icd/u57/h_uc/), which I purchased for $80 in January 2024.
 This electronic device has had a high return on investment.
 I have used it for about 1000 hours.
 
+As of version 0.6, you can process that transcript by sending it an LLM, apply a transcript-parser skill, and return the parsered transript with a TODO list at the bottom.
+You can carry out live transcription with the package whisperer.EL by running the whisper – run command.
+You can select the directly dictated transcript to make a region out of it and then apply the command from this library called M-x whisper-dvr-llm-process-region to apply the transcript parser skill.
+
+I have everything wired for use with LaTeX, which is superior to markdown in its capabilities.
+Nonetheless, you can translate the LaTeX into markdown using pandoc or a LLM.
+
 ## Problem addressed: select an MP3 file to be transcribed from a menu generated from a folder on the DVR.
 This package eliminates the need to change the file path from the current file path to the audio file's path when running whisper-file.
 It reduces the friction of transcribing multiple audio files daily, such as those for the morning and evening commutes.
+
 
 <p align="center"><img src="./images/audioFileListing.png" alt="HTML5 Icon" style="width:514px;height:145px;"></p>
 
@@ -28,6 +36,9 @@ It reduces the friction of transcribing multiple audio files daily, such as thos
 - [Usage](#usage)
   - [Tutorial: Basic Transcription Workflow](#tutorial-basic-transcription-workflow)
   - [Tutorial: Batch Processing Multiple Recordings](#tutorial-batch-processing-multiple-recordings)
+- [LLM Post-Processing](#llm-post-processing)
+  - [Tutorial: Turning on post-processing with Claude Code](#tutorial-turning-on-post-processing-with-claude-code)
+  - [Choosing the model or harness](#choosing-the-model-or-harness)
 - [Commands](#commands)
 - [Testing](#testing)
   - [Tutorial: Running the Test Suite](#tutorial-running-the-test-suite)
@@ -41,14 +52,16 @@ It reduces the friction of transcribing multiple audio files daily, such as thos
 - **Seamless integration** with whisper.el for high-quality transcription
 - **Configurable DVR path** supporting different recorder setups and operating systems
 - **Safety checks** preventing accidental overwrites in read-only buffers
+- **Optional LLM post-processing** that turns the raw transcript into structured LaTeX with the transcript-parser skill, using Claude Code, the Anthropic API, a local model, any command line harness, or an Emacs Lisp function
 - **Bulk clearing** of every audio file on the DVR in one operation, with trash support
 - **Comprehensive test suite** with unit and integration tests
 
 ## Requirements
 
 - Emacs 27.1 or later
-- [whisper.el](https://github.com/natruj/whisper.el) package
+- [whisper.el](https://github.com/natrys/whisper.el) package
 - A working Whisper installation ([whisper.cpp](https://github.com/ggerganov/whisper.cpp) or [OpenAI Whisper](https://github.com/openai/whisper))
+- Optional, for LLM post-processing: [Claude Code](https://claude.com/claude-code), `curl` with an Anthropic API key, or a local model server such as [Ollama](https://ollama.com)
 
 ## Installation
 
@@ -368,6 +381,140 @@ C-x )
 C-x e e e  ;; Run macro multiple times
 ```
 
+## LLM Post-Processing
+
+whisper.el returns a raw transcript.
+It has no headings, it keeps every filler word, and it buries the action items in the middle of sentences.
+Version 0.6.0 adds an optional second stage that sends the raw transcript to a large language model.
+The model applies the `transcript-parser` skill and returns a structured LaTeX fragment with `\subsubsection` headings, `\index` keys below each heading, one sentence per line, expanded contractions, corrected grammar, and a closing checklist of TODO items.
+
+Think of the two stages as a court reporter and an editor.
+whisper.el is the reporter who takes down every word.
+The LLM is the editor who turns the stenographic record into a clean document.
+The editor works in the background, so Emacs stays responsive while the model thinks.
+
+### How it works
+
+1. `whisper-dvr` transcribes the selected recording, and whisper.el inserts the raw text at point as before.
+2. whisper-dvr captures that text through `whisper-after-transcription-hook` and `whisper-after-insert-hook`.
+3. The raw text goes to the backend named by `whisper-dvr-llm-backend` in an asynchronous process.
+4. When the answer arrives, it replaces the raw text in the same buffer (or follows it, or opens in its own buffer, depending on `whisper-dvr-llm-insert-method`).
+
+The raw transcript is never lost.
+If the request fails or times out, the raw text stays in place and a message explains why.
+If you edit the raw text while the model is working, the result is inserted after your edited text instead of replacing it.
+
+### Tutorial: Turning on post-processing with Claude Code
+
+Claude Code is a harness, so it loads the `transcript-parser` skill from `~/.claude/skills/` by itself.
+
+1. Confirm that `claude` runs from a terminal and that `~/.claude/skills/transcript-parser/SKILL.md` exists.
+2. Add the following to your init file.
+
+   ```elisp
+   (setq whisper-dvr-llm-postprocess t
+         whisper-dvr-llm-backend 'claude-code)
+   ;; Emacs launched from the macOS Dock may not see your shell PATH.
+   (setq whisper-dvr-llm-claude-program (expand-file-name "~/.local/bin/claude"))
+   ```
+
+3. Open the `.tex` or `.org` file that should receive the notes and run `M-x whisper-dvr`.
+4. The raw transcript appears first, and the echo area reads "Please wait, the LLM is parsing the transcript. This step can take several minutes." A minute or two later the raw text is replaced by the parsed LaTeX.
+
+A prefix argument inverts the setting for one run.
+`C-u M-x whisper-dvr` skips the LLM when post-processing is on, and uses it when post-processing is off.
+
+### Choosing the model or harness
+
+| Backend | `whisper-dvr-llm-backend` | What runs the skill | Model setting |
+|---------|---------------------------|---------------------|---------------|
+| Claude Code | `claude-code` | `claude -p`, which loads the skill by name | `whisper-dvr-llm-model` passed as `--model` (nil uses the CLI default) |
+| Anthropic API | `anthropic` | Messages API through curl, with SKILL.md as the system prompt | Defaults to `claude-sonnet-5-5` |
+| Local model | `openai-compatible` | Ollama, llama.cpp server, LM Studio, vLLM, or OpenAI | Defaults to `llama3.1` |
+| Any harness | `command` | A shell command that reads stdin and writes stdout | Replaces `%m` in `whisper-dvr-llm-command` |
+| Emacs Lisp | `function` | A function such as a gptel or ellama wrapper | Up to the function |
+
+Every backend except `claude-code` reads the skill text from `whisper-dvr-llm-skill-file` and strips its YAML front matter.
+When that file is missing, a condensed copy of the skill in `whisper-dvr-llm-default-instructions` is used instead.
+
+**Local model with Ollama**
+
+```elisp
+(setq whisper-dvr-llm-postprocess t
+      whisper-dvr-llm-backend 'openai-compatible
+      whisper-dvr-llm-model "qwen2.5:14b")
+;; llama.cpp server or LM Studio use a different port.
+;; (setq whisper-dvr-llm-api-url "http://localhost:8080/v1/chat/completions")
+```
+
+**Anthropic API**
+
+```elisp
+(setq whisper-dvr-llm-backend 'anthropic
+      whisper-dvr-llm-model "claude-sonnet-5-5")
+;; The key comes from ANTHROPIC_API_KEY or from ~/.authinfo.gpg:
+;; machine api.anthropic.com password sk-ant-...
+```
+
+The key is written to a private temporary file that curl reads, so it never appears in the process list.
+
+**Another harness through the command backend**
+
+```elisp
+(setq whisper-dvr-llm-backend 'command
+      whisper-dvr-llm-model "qwen2.5:14b"
+      whisper-dvr-llm-command '("ollama" "run" "%m"))
+;; Simon Willison's llm tool works the same way.
+;; (setq whisper-dvr-llm-command '("llm" "-m" "%m"))
+```
+
+**gptel through the function backend**
+
+```elisp
+(setq whisper-dvr-llm-backend 'function
+      whisper-dvr-llm-function
+      (lambda (instructions transcript callback errback)
+        (gptel-request transcript
+          :system instructions
+          :callback (lambda (response info)
+                      (if (stringp response)
+                          (funcall callback response)
+                        (funcall errback (plist-get info :status)))))))
+```
+
+`M-x whisper-dvr-llm-select-backend` switches the backend and the model for the current session without editing your init file.
+
+### Post-processing text that is already in a buffer or a file
+
+- `M-x whisper-dvr-llm-process-region` sends the active region, or the whole buffer when no region is active, to the LLM.
+- `M-x whisper-dvr-llm-process-file` reads a transcript file such as `notes.txt` and writes `notes_parsed.tex` beside it, which matches the convention of the skill. With a prefix argument it opens the new file.
+- `M-x whisper-dvr-llm-cancel` stops every running request and leaves the raw text in place.
+
+### LLM settings
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `whisper-dvr-llm-postprocess` | `nil` | Send new transcripts to the LLM |
+| `whisper-dvr-llm-backend` | `claude-code` | Which LLM or harness runs the skill |
+| `whisper-dvr-llm-model` | `nil` | Model name, or nil for the backend default |
+| `whisper-dvr-llm-default-models` | Sonnet 5.5 and llama3.1 | Per-backend fallback models |
+| `whisper-dvr-llm-api-url` | `nil` | Endpoint for the HTTP backends |
+| `whisper-dvr-llm-api-key` | `nil` | String, function, or nil for environment and auth-source |
+| `whisper-dvr-llm-skill-name` | `"transcript-parser"` | Skill the harness is asked to run |
+| `whisper-dvr-llm-skill-file` | `~/.claude/skills/transcript-parser/SKILL.md` | Skill text for the other backends |
+| `whisper-dvr-llm-claude-program` | `"claude"` | Path to Claude Code |
+| `whisper-dvr-llm-claude-args` | `--output-format text --allowedTools Skill` | Extra CLI arguments |
+| `whisper-dvr-llm-claude-unset-env` | `("ANTHROPIC_API_KEY")` | Variables removed so Claude Code uses your Pro or Max login |
+| `whisper-dvr-llm-claude-embed-skill` | `nil` | Also pass the skill text with `--append-system-prompt` |
+| `whisper-dvr-llm-command` | `("ollama" "run" "%m")` | Command for the `command` backend |
+| `whisper-dvr-llm-function` | `nil` | Function for the `function` backend |
+| `whisper-dvr-llm-insert-method` | `replace` | `replace`, `append`, or `buffer` |
+| `whisper-dvr-llm-timeout` | `900` | Seconds before a request is abandoned |
+| `whisper-dvr-llm-max-tokens` | `16000` | Output token limit for the HTTP backends |
+| `whisper-dvr-llm-temperature` | `nil` | Sampling temperature, or nil for the server default |
+| `whisper-dvr-llm-wait-message` | "Please wait, the LLM is parsing the transcript. ..." | Echo-area notice while the LLM works, or nil for none |
+| `whisper-dvr-llm-after-process-hook` | `nil` | Functions called with the bounds of the inserted result |
+
 ## Commands
 
 | Command | Description |
@@ -378,6 +525,13 @@ C-x e e e  ;; Run macro multiple times
 | `whisper-dvr-set-directory-to-internal-memory` | Reset the DVR directory to the built-in memory |
 | `whisper-dvr-transcribe-file` | Transcribe one audio file without the selection menu |
 | `whisper-dvr-clear-all-files` | Remove every audio file from the DVR (trash by default) |
+| `whisper-dvr-toggle-llm-postprocess` | Turn LLM post-processing of new transcripts on or off |
+| `whisper-dvr-llm-select-backend` | Choose the LLM backend and model for this session |
+| `whisper-dvr-llm-process-region` | Post-process the region or buffer with the LLM |
+| `whisper-dvr-llm-process-file` | Write `FILE_parsed.tex` from a transcript file |
+| `whisper-dvr-llm-cancel` | Cancel running LLM requests |
+| `whisper-dvr-llm-test-backend` | Send a short sample transcript to check the backend |
+| `whisper-dvr-llm-show-log` | Show the command, exit code, stderr, and stdout of each LLM run |
 
 ### whisper-dvr
 
@@ -493,8 +647,8 @@ make test
 # Run tests with verbose output
 make test-verbose
 
-# Run tests without requiring whisper.el
-make test-standalone
+# Run only the LLM post-processing tests
+make test-llm
 ```
 
 #### Running Tests from Emacs
@@ -553,6 +707,7 @@ F whisper-dvr-test-default-directory
 | Clear All Files | 9 | Bulk clearing of audio files |
 | Integration | 4 | End-to-end workflows |
 | Edge Cases | 3 | Unusual inputs |
+| LLM Post-Processing | 41 | Settings, request building, response parsing, delivery, subprocess runs, timeouts, and the whisper.el hook flow |
 
 #### Running Linting Checks
 
@@ -591,6 +746,28 @@ whisper-dvr/
 ```
 
 ## Troubleshooting
+
+### LLM post-processing skipped
+
+A warning that begins with "LLM post-processing skipped" means the backend could not run, so the plain transcription went ahead without it.
+The usual cause is that Emacs cannot find `claude`, `curl`, or the command in `whisper-dvr-llm-command` because Emacs did not inherit your shell PATH.
+Set `whisper-dvr-llm-claude-program` to a full path, or install the exec-path-from-shell package.
+
+### LLM post-processing failed
+
+The raw transcript stays in the buffer, and the message names the cause.
+"Credit balance is too low" from the `claude-code` backend means Claude Code billed an API key instead of your Pro or Max subscription.
+Claude Code prefers `ANTHROPIC_API_KEY` whenever that variable is set.
+whisper-dvr removes it from the environment of the Claude Code process by default (see `whisper-dvr-llm-claude-unset-env`), so a fresh `make compile` and a restart fix this error.
+Confirm in a terminal that `claude` is logged in with your subscription by running `claude /login` once.
+
+`M-x whisper-dvr-llm-show-log` shows the full command, the exit code, and both output streams of every run.
+Claude Code in print mode writes many of its errors, such as an expired login, to standard output, and the log captures them.
+`M-x whisper-dvr-llm-test-backend` checks a backend with a two-sentence sample before you transcribe a long recording.
+An HTTP 401 means the API key is wrong.
+An HTTP 404 from a local server usually means that the model named in `whisper-dvr-llm-model` has not been pulled.
+A timeout means the model needed longer than `whisper-dvr-llm-timeout` seconds, which happens with long recordings on small local machines.
+Run `M-x whisper-dvr-llm-process-region` on the raw text to try again.
 
 ### DVR Directory Not Found
 
@@ -647,7 +824,7 @@ This project is licensed under the GNU General Public License v3.0. See the [LIC
 
 ## Acknowledgments
 
-- [whisper.el](https://github.com/natruj/whisper.el) for Whisper integration in Emacs
+- [whisper.el](https://github.com/natrys/whisper.el) for Whisper integration in Emacs
 - [OpenAI Whisper](https://github.com/openai/whisper) for the transcription model
 - [whisper.cpp](https://github.com/ggerganov/whisper.cpp) for the efficient C++ implementation
 
@@ -667,6 +844,7 @@ I intend to do so soon.
 | Version 0.3.0 | Added function to eject DVR in an operating system-specific manner.      | 2/24/2026 |
 | Version 0.4.0 | Added `whisper-dvr-clear-all-files` for one-step removal of every audio file on the DVR, with trash support and a no-confirm prefix argument. Added nine ERT tests covering the new command. | 5/8/2026 |
 | Version 0.5.0 | Added `whisper-dvr-set-directory-to-sd-card` and `whisper-dvr-set-directory-to-internal-memory`, which switch the recording location without retyping a path, plus a prefix argument that saves the choice. Defined four functions and four variables that were called but never defined, so background monitoring, automatic transcription, and mobile sync no longer fail with a void-function error. Fixed the `let` that needed to be `let*` in `whisper-dvr-list-remote-devices`, the duplicate Dropbox token prompt, and the discarded reason in the failure notification. `make compile` and `checkdoc` now run clean, and the suite grew from 31 tests to 50. | 9/9/2026 |
+| Version 0.6.0 | Added optional LLM post-processing of transcripts with the transcript-parser skill. New settings choose whether to post-process and which LLM runs the skill, including Claude Code as a harness, the Anthropic API, local models behind an OpenAI-compatible server such as Ollama, any command line tool, or an Emacs Lisp function. New commands process a region or a transcript file, toggle the feature, switch the backend, and cancel requests. The suite grew from 50 tests to 91. | 10/4/2026 |
 
 ## Sources of funding
 
