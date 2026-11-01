@@ -9,16 +9,16 @@ I use this package with a Sony IC Recorder (https://rd1.sony.net/help/icd/u57/h_
 This electronic device has had a high return on investment.
 I have used it for about 1000 hours.
 
-As of version 0.6, you can process that transcript by sending it an LLM, apply a transcript-parser skill, and return the parsered transript with a TODO list at the bottom.
-You can carry out live transcription with the package whisperer.EL by running the whisper – run command.
-You can select the directly dictated transcript to make a region out of it and then apply the command from this library called M-x whisper-dvr-llm-process-region to apply the transcript parser skill.
+As of version 0.6, you can process that transcript by sending it to an LLM, applying a transcript-parser skill, and returning the parsed transcript with a TODO list at the bottom.
+You can do live transcription with the whisperer package.EL by running the whisper–run command.
+You can select the directly dictated transcript, make a region from it, and then run the library command M-x whisper-dvr-llm-process-region to apply the transcript parser skill.
 
-I have everything wired for use with LaTeX, which is superior to markdown in its capabilities.
-Nonetheless, you can translate the LaTeX into markdown using pandoc or a LLM.
+I have everything set up to work with LaTeX, which is more capable than Markdown.
+Nonetheless, you can translate the LaTeX into Markdown using Pandoc or an LLM.
 
 ## Problem addressed: select an MP3 file to be transcribed from a menu generated from a folder on the DVR.
 This package eliminates the need to change the file path from the current file path to the audio file's path when running whisper-file.
-It reduces the friction of transcribing multiple audio files daily, such as those for the morning and evening commutes.
+It reduces friction when transcribing multiple audio files daily, such as those from the morning and evening commutes.
 
 
 <p align="center"><img src="./images/audioFileListing.png" alt="HTML5 Icon" style="width:514px;height:145px;"></p>
@@ -194,7 +194,7 @@ Set the path to your DVR's recording directory:
 
 ### Recording Location Shortcuts
 
-Sony recorders store recordings in two places, the built-in memory and a removable SD card.
+Sony recorders store recordings in two places: the built-in memory and a removable SD card.
 The two locations use different folder layouts. 
 Two variables hold those paths so that switching between them takes one command instead of a fresh directory prompt:
 
@@ -313,9 +313,9 @@ C-x C-s
 
 #### Step 6: Eject the DVR
 
-This Bash function for macOS makes it easier. 
-Uncomment the line for the SDK if you supplemented the memory of your DVR with an SDK.
-Edit the "IC RECORDER" to whatever your DVR is called.
+This Bash function makes it easier. 
+Uncomment the SDK line if you supplemented your DVR's memory with an SDK.
+Edit "IC RECORDER" to match your DVR's name.
 
 ```bash
 edvr() {
@@ -386,7 +386,7 @@ C-x e e e  ;; Run macro multiple times
 ## LLM Post-Processing
 
 whisper.el returns a raw transcript.
-It has no headings, it keeps every filler word, and it buries the action items in the middle of sentences.
+It has no headings, it keeps every filler word, and it buries action items in the middle of sentences.
 Version 0.6.0 adds an optional second stage that sends the raw transcript to a large language model.
 The model applies the `transcript-parser` skill and returns a structured LaTeX fragment with `\subsubsection` headings, `\index` keys below each heading, one sentence per line, expanded contractions, corrected grammar, and a closing checklist of TODO items.
 
@@ -399,12 +399,12 @@ The editor works in the background, so Emacs stays responsive while the model th
 
 1. `whisper-dvr` transcribes the selected recording, and whisper.el inserts the raw text at point as before.
 2. whisper-dvr captures that text through `whisper-after-transcription-hook` and `whisper-after-insert-hook`.
-3. The raw text goes to the backend named by `whisper-dvr-llm-backend` in an asynchronous process.
+3. The raw text goes to the backend named `whisper-dvr-llm-backend` in an asynchronous process.
 4. When the answer arrives, it replaces the raw text in the same buffer (or follows it, or opens in its own buffer, depending on `whisper-dvr-llm-insert-method`).
 
 The raw transcript is never lost.
-If the request fails or times out, the raw text stays in place and a message explains why.
-If you edit the raw text while the model is working, the result is inserted after your edited text instead of replacing it.
+If the request fails or times out, the raw text stays in place, and a message explains why.
+If you edit the raw text while the model is working, it inserts the result after your edited text instead of replacing it.
 
 ### Tutorial: Turning on post-processing with Claude Code
 
@@ -489,7 +489,7 @@ The key is written to a private temporary file that curl reads, so it never appe
 ### Post-processing text that is already in a buffer or a file
 
 - `M-x whisper-dvr-llm-process-region` sends the active region, or the whole buffer when no region is active, to the LLM.
-- `M-x whisper-dvr-llm-process-file` reads a transcript file such as `notes.txt` and writes `notes_parsed.tex` beside it, which matches the convention of the skill. With a prefix argument it opens the new file.
+- `M-x whisper-dvr-llm-process-file` reads a transcript file such as `notes.txt` and writes `notes_parsed.tex` beside it, which matches the convention of the skill. With a prefix argument, it opens the new file.
 - `M-x whisper-dvr-llm-cancel` stops every running request and leaves the raw text in place.
 
 ### LLM settings
@@ -810,7 +810,7 @@ whisper-dvr/
 
 ### LLM post-processing skipped
 
-A warning that begins with "LLM post-processing skipped" means the backend could not run, so the plain transcription went ahead without it.
+A warning that begins with "LLM post-processing skipped" means the backend could not run, so the plain transcription proceeded without it.
 The usual cause is that Emacs cannot find `claude`, `curl`, or the command in `whisper-dvr-llm-command` because Emacs did not inherit your shell PATH.
 Set `whisper-dvr-llm-claude-program` to a full path, or install the exec-path-from-shell package.
 
@@ -819,7 +819,7 @@ Set `whisper-dvr-llm-claude-program` to a full path, or install the exec-path-fr
 The raw transcript stays in the buffer, and the message names the cause.
 "Credit balance is too low" from the `claude-code` backend means Claude Code billed an API key instead of your Pro or Max subscription.
 Claude Code prefers `ANTHROPIC_API_KEY` whenever that variable is set.
-whisper-dvr removes it from the environment of the Claude Code process by default (see `whisper-dvr-llm-claude-unset-env`), so a fresh `make compile` and a restart fix this error.
+By default, ` whisper-dvr' removes it from the Claude Code process environment (see `whisper-dvr-llm-claude-unset-env`), so a fresh `make compile` and a restart fix this error.
 Confirm in a terminal that `claude` is logged in with your subscription by running `claude /login` once.
 
 `M-x whisper-dvr-llm-show-log` shows the full command, the exit code, and both output streams of every run.
@@ -902,10 +902,10 @@ I intend to do so soon.
 |:-----------|:------------------------------------------------------------------------------------------------------------------------------------------|:--------------------|
 | Version 0.1.0 |   Added badges, funding, and update table.  Initial commit.                                                                              | 1/30/2026  |
 | Version 0.2.0 | Added functions to delete selected files or bulk delete old files from DVR's memory.         | 2/??/2026  |
-| Version 0.3.0 | Added function to eject DVR in an operating system-specific manner.      | 2/24/2026 |
+| Version 0.3.0 | Added a function to eject the DVR in an operating system-specific manner.      | 2/24/2026 |
 | Version 0.4.0 | Added `whisper-dvr-clear-all-files` for one-step removal of every audio file on the DVR, with trash support and a no-confirm prefix argument. Added nine ERT tests covering the new command. | 5/8/2026 |
 | Version 0.5.0 | Added `whisper-dvr-set-directory-to-sd-card` and `whisper-dvr-set-directory-to-internal-memory`, which switch the recording location without retyping a path, plus a prefix argument that saves the choice. Defined four functions and four variables that were called but never defined, so background monitoring, automatic transcription, and mobile sync no longer fail with a void-function error. Fixed the `let` that needed to be `let*` in `whisper-dvr-list-remote-devices`, the duplicate Dropbox token prompt, and the discarded reason in the failure notification. `make compile` and `checkdoc` now run clean, and the suite grew from 31 tests to 50. | 9/9/2026 |
-| Version 0.6.0 | Added optional LLM post-processing of transcripts with the transcript-parser skill. New settings choose whether to post-process and which LLM runs the skill, including Claude Code as a harness, the Anthropic API, local models behind an OpenAI-compatible server such as Ollama, any command line tool, or an Emacs Lisp function. New commands process a region or a transcript file, toggle the feature, switch the backend, and cancel requests. The suite grew from 50 tests to 91. | 10/4/2026 |
+| Version 0.6.0 | Added optional LLM post-processing of transcripts with the transcript-parser skill. New settings choose whether to post-process and which LLM runs the skill, including Claude Code as a harness, the Anthropic API, local models behind an OpenAI-compatible server such as Ollama, any command-line tool, or an Emacs Lisp function. New commands process a region or a transcript file, toggle the feature, switch the backend, and cancel requests. The suite grew from 50 tests to 91. | 10/4/2026 |
 | Version 0.7.0 | Added optional automatic deletion of each recording from the DVR after it has been processed, which removes the manual deletion step before ejecting the recorder. The new option `whisper-dvr-auto-delete-audio` removes the file after the last requested stage succeeds or right after the raw transcript is inserted. `whisper-dvr-auto-delete-method` chooses the trash or permanent deletion, and `whisper-dvr-toggle-auto-delete` switches the feature for a session. Only files on the DVR are ever removed. The suite grew from 91 tests to 105. | 11/1/2026 |
 
 ## Sources of funding
