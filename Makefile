@@ -20,7 +20,7 @@ VERSION = $(shell grep -E "^;; Version:" whisper-dvr.el | sed 's/;; Version: //'
 MAKEINFO ?= makeinfo
 TEXI2PDF ?= texi2pdf
 
-.PHONY: all test test-verbose test-llm lint compile clean help install-deps info pdf html docs
+.PHONY: all test test-verbose test-llm test-auto-delete lint compile clean help install-deps info pdf html docs
 
 all: compile test lint
 
@@ -35,6 +35,7 @@ help:
 	@echo "  test          Run ERT tests"
 	@echo "  test-verbose  Run ERT tests with verbose output"
 	@echo "  test-llm      Run only the LLM post-processing tests"
+	@echo "  test-auto-delete  Run only the automatic deletion tests"
 	@echo "  lint          Run package-lint and checkdoc"
 	@echo "  compile       Byte-compile the source files"
 	@echo "  clean         Remove compiled files"
@@ -92,6 +93,19 @@ test-llm:
 	  -l $(SRCS) \
 	  -l $(TESTS) \
 	  --eval "(ert-run-tests-batch-and-exit \"^whisper-dvr-test-llm-\")"
+
+## Run only the automatic deletion tests
+test-auto-delete:
+	@echo "Running automatic deletion tests..."
+	$(BATCH) \
+	  --eval "(add-to-list 'load-path \".\")" \
+	  --eval "(setq whisper-install-whispercpp nil)" \
+	  --eval "(provide 'whisper)" \
+	  --eval "(defun whisper-run (&optional _arg) nil)" \
+	  -l ert \
+	  -l $(SRCS) \
+	  -l $(TESTS) \
+	  --eval "(ert-run-tests-batch-and-exit \"^whisper-dvr-test-auto-delete-\")"
 
 ## Lint the source files
 lint: lint-checkdoc lint-package

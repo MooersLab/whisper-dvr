@@ -1,4 +1,4 @@
-![Version](https://img.shields.io/static/v1?label=whisper-dvr&message=0.6&color=brightcolor)
+![Version](https://img.shields.io/static/v1?label=whisper-dvr&message=0.7&color=brightcolor)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Emacs](https://img.shields.io/badge/Emacs-27.1+-purple.svg)](https://www.gnu.org/software/emacs/)
 
@@ -39,6 +39,7 @@ It reduces the friction of transcribing multiple audio files daily, such as thos
 - [LLM Post-Processing](#llm-post-processing)
   - [Tutorial: Turning on post-processing with Claude Code](#tutorial-turning-on-post-processing-with-claude-code)
   - [Choosing the model or harness](#choosing-the-model-or-harness)
+- [Automatic Deletion of Processed Recordings](#automatic-deletion-of-processed-recordings)
 - [Commands](#commands)
 - [Testing](#testing)
   - [Tutorial: Running the Test Suite](#tutorial-running-the-test-suite)
@@ -54,6 +55,7 @@ It reduces the friction of transcribing multiple audio files daily, such as thos
 - **Safety checks** preventing accidental overwrites in read-only buffers
 - **Optional LLM post-processing** that turns the raw transcript into structured LaTeX with the transcript-parser skill, using Claude Code, the Anthropic API, a local model, any command line harness, or an Emacs Lisp function
 - **Bulk clearing** of every audio file on the DVR in one operation, with trash support
+- **Optional automatic deletion** of each recording from the DVR once it has been transcribed and, when the LLM runs, parsed, so the recorder is empty and ready to eject
 - **Comprehensive test suite** with unit and integration tests
 
 ## Requirements
@@ -515,6 +517,60 @@ The key is written to a private temporary file that curl reads, so it never appe
 | `whisper-dvr-llm-wait-message` | "Please wait, the LLM is parsing the transcript. ..." | Echo-area notice while the LLM works, or nil for none |
 | `whisper-dvr-llm-after-process-hook` | `nil` | Functions called with the bounds of the inserted result |
 
+## Automatic Deletion of Processed Recordings
+
+Before version 0.7.0 the end of a session had three steps.
+You transcribed the recording, you deleted it from the DVR, and you ejected the DVR.
+Version 0.7.0 can fold the middle step into the first.
+When `whisper-dvr-auto-delete-audio` is non-nil, whisper-dvr removes the audio file from the DVR as soon as its processing has succeeded, so the next step is `M-x whisper-dvr-eject`.
+
+Think of the recording as a library book on loan.
+It goes back to the shelf only after you have finished every chapter you asked for.
+When the LLM runs, the last chapter is the parsed transcript.
+When it does not, the last chapter is the raw transcript.
+
+### Turning it on
+
+```elisp
+(setq whisper-dvr-auto-delete-audio 'after-processing)
+;; Free the space on the recorder at once instead of using the trash.
+(setq whisper-dvr-auto-delete-method 'delete)
+```
+
+`M-x whisper-dvr-toggle-auto-delete` turns the feature on or off for the current session.
+With a prefix argument it lets you pick the timing from a list.
+
+### When the recording is removed
+
+| `whisper-dvr-auto-delete-audio` | LLM post-processing off | LLM post-processing on |
+|---------------------------------|-------------------------|------------------------|
+| `nil` (default) | Kept | Kept |
+| `after-processing` | Removed after the raw transcript is inserted | Removed after the parsed LaTeX is delivered. Kept if the LLM fails, times out, or is cancelled |
+| `after-transcription` | Removed after the raw transcript is inserted | Removed after the raw transcript is inserted, even if the LLM later fails |
+
+### Safety rules
+
+- Only files inside a DVR location are removed. These locations are `whisper-dvr-directory`, `whisper-dvr-sd-card-directory`, `whisper-dvr-internal-memory-directory`, and the entries in `whisper-dvr-volume-mount-points`. A copy of a recording kept anywhere else is never touched.
+- An empty transcript keeps the file.
+- A whisper.el run for a different file, such as a live dictation started in the meantime, keeps the file.
+- With `after-processing`, the file stays when LLM post-processing was requested but could not start, for example because Emacs cannot find `claude`.
+- Automatic deletion applies to the interactive commands `whisper-dvr` and `whisper-dvr-transcribe-file`. Batch and automatic transcription on device connection do not delete files.
+
+### How the file is removed
+
+`whisper-dvr-auto-delete-method` decides.
+The value `default` follows `whisper-dvr-use-trash`, `trash` always uses the trash, and `delete` removes the file permanently.
+Depending on how Emacs moves files to the trash on your system, a recording trashed from a removable volume may stay on that volume in a hidden trash folder and keep using space on the recorder.
+Choose `delete` when you want the space back at once.
+
+`whisper-dvr-auto-delete-hook` runs after each removal with the path of the removed file, which is a convenient place to log what was deleted.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `whisper-dvr-auto-delete-audio` | `nil` | When to remove a processed recording from the DVR |
+| `whisper-dvr-auto-delete-method` | `default` | `default`, `trash`, or `delete` |
+| `whisper-dvr-auto-delete-hook` | `nil` | Functions called with the path of each removed recording |
+
 ## Commands
 
 | Command | Description |
@@ -525,6 +581,7 @@ The key is written to a private temporary file that curl reads, so it never appe
 | `whisper-dvr-set-directory-to-internal-memory` | Reset the DVR directory to the built-in memory |
 | `whisper-dvr-transcribe-file` | Transcribe one audio file without the selection menu |
 | `whisper-dvr-clear-all-files` | Remove every audio file from the DVR (trash by default) |
+| `whisper-dvr-toggle-auto-delete` | Turn automatic deletion of processed recordings on or off |
 | `whisper-dvr-toggle-llm-postprocess` | Turn LLM post-processing of new transcripts on or off |
 | `whisper-dvr-llm-select-backend` | Choose the LLM backend and model for this session |
 | `whisper-dvr-llm-process-region` | Post-process the region or buffer with the LLM |
@@ -649,6 +706,9 @@ make test-verbose
 
 # Run only the LLM post-processing tests
 make test-llm
+
+# Run only the automatic deletion tests
+make test-auto-delete
 ```
 
 #### Running Tests from Emacs
@@ -708,6 +768,7 @@ F whisper-dvr-test-default-directory
 | Integration | 4 | End-to-end workflows |
 | Edge Cases | 3 | Unusual inputs |
 | LLM Post-Processing | 41 | Settings, request building, response parsing, delivery, subprocess runs, timeouts, and the whisper.el hook flow |
+| Automatic Deletion | 14 | DVR location check, deletion method, the stage that triggers removal, the whisper.el and LLM hook flows, and the toggle |
 
 #### Running Linting Checks
 
@@ -845,6 +906,7 @@ I intend to do so soon.
 | Version 0.4.0 | Added `whisper-dvr-clear-all-files` for one-step removal of every audio file on the DVR, with trash support and a no-confirm prefix argument. Added nine ERT tests covering the new command. | 5/8/2026 |
 | Version 0.5.0 | Added `whisper-dvr-set-directory-to-sd-card` and `whisper-dvr-set-directory-to-internal-memory`, which switch the recording location without retyping a path, plus a prefix argument that saves the choice. Defined four functions and four variables that were called but never defined, so background monitoring, automatic transcription, and mobile sync no longer fail with a void-function error. Fixed the `let` that needed to be `let*` in `whisper-dvr-list-remote-devices`, the duplicate Dropbox token prompt, and the discarded reason in the failure notification. `make compile` and `checkdoc` now run clean, and the suite grew from 31 tests to 50. | 9/9/2026 |
 | Version 0.6.0 | Added optional LLM post-processing of transcripts with the transcript-parser skill. New settings choose whether to post-process and which LLM runs the skill, including Claude Code as a harness, the Anthropic API, local models behind an OpenAI-compatible server such as Ollama, any command line tool, or an Emacs Lisp function. New commands process a region or a transcript file, toggle the feature, switch the backend, and cancel requests. The suite grew from 50 tests to 91. | 10/4/2026 |
+| Version 0.7.0 | Added optional automatic deletion of each recording from the DVR after it has been processed, which removes the manual deletion step before ejecting the recorder. The new option `whisper-dvr-auto-delete-audio` removes the file after the last requested stage succeeds or right after the raw transcript is inserted. `whisper-dvr-auto-delete-method` chooses the trash or permanent deletion, and `whisper-dvr-toggle-auto-delete` switches the feature for a session. Only files on the DVR are ever removed. The suite grew from 91 tests to 105. | 11/1/2026 |
 
 ## Sources of funding
 

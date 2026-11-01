@@ -5,7 +5,7 @@
 ;; URL: https://github.com/MooersLab/whisper-dvr
 ;; Keywords: multimedia, convenience
 ;; Package-Requires: ((emacs "27.1") (whisper "0.1"))
-;; Version: 0.6.0
+;; Version: 0.7.0
 
 ;;; Commentary:
 ;; This package provides functions to list, transcribe, and manage MP3 files
@@ -19,6 +19,12 @@
 ;; Code (a harness), the Anthropic API, a local model behind an
 ;; OpenAI-compatible server such as Ollama, any shell command, or an
 ;; Emacs Lisp function.  See the `whisper-dvr-llm' customization group.
+;;
+;; Version 0.7.0 adds optional automatic deletion of the recording.
+;; When `whisper-dvr-auto-delete-audio' is non-nil, the audio file is
+;; removed from the DVR once its transcript has been inserted and, when
+;; the LLM runs, once the processed text has been delivered.  The
+;; recorder is then empty and ready to eject with `whisper-dvr-eject'.
 
 ;;; Code:
 
@@ -119,6 +125,64 @@ On macOS these are paths under /Volumes/.
 On Linux these are mount points such as /media/<user>/<label>.
 On Windows these are drive letters such as \"E:\" or \"F:\"."
   :type '(repeat string)
+  :group 'whisper-dvr)
+
+;;; Automatic deletion of processed recordings
+
+(defcustom whisper-dvr-auto-delete-audio nil
+  "When to delete the audio file from the DVR after it is processed.
+The value is one of these symbols.
+
+  nil                    Keep the recording.  This is the default.
+  `after-processing'     Delete the recording once the last stage
+                         that was requested finishes successfully.
+                         When LLM post-processing runs, the file is
+                         removed only after the LLM result has been
+                         delivered.  Without the LLM, the file is
+                         removed once the raw transcript is inserted.
+                         A failed, timed out, or cancelled LLM request
+                         keeps the file.
+  `after-transcription'  Delete the recording as soon as whisper.el
+                         has inserted a non-empty raw transcript,
+                         whether or not the LLM succeeds later.
+
+Only files inside one of the DVR locations are removed.  These
+locations are `whisper-dvr-directory', `whisper-dvr-sd-card-directory',
+`whisper-dvr-internal-memory-directory', and the entries in
+`whisper-dvr-volume-mount-points'.  A copy of a recording kept anywhere
+else is never touched.  Automatic deletion applies to the interactive
+commands `whisper-dvr' and `whisper-dvr-transcribe-file'.  The way the
+file is removed follows `whisper-dvr-auto-delete-method'.  Use
+`whisper-dvr-toggle-auto-delete' to change this option for the current
+session."
+  :type '(choice (const :tag "Keep the recording" nil)
+                 (const :tag "Delete after the last requested stage succeeds"
+                        after-processing)
+                 (const :tag "Delete after the raw transcript is inserted"
+                        after-transcription))
+  :group 'whisper-dvr)
+
+(defcustom whisper-dvr-auto-delete-method 'default
+  "How `whisper-dvr-auto-delete-audio' removes a processed recording.
+The value is one of these symbols.
+
+  `default'  Follow `whisper-dvr-use-trash'.
+  `trash'    Move the recording to the trash.
+  `delete'   Delete the recording permanently.
+
+Depending on how Emacs moves files to the trash on your system, a
+recording trashed from a removable volume may stay on that volume in a
+hidden trash folder and keep using space on the recorder until the
+trash is emptied.  Choose `delete' to free the space at once."
+  :type '(choice (const :tag "Follow whisper-dvr-use-trash" default)
+                 (const :tag "Move to trash" trash)
+                 (const :tag "Delete permanently" delete))
+  :group 'whisper-dvr)
+
+(defcustom whisper-dvr-auto-delete-hook nil
+  "Hook run after a processed recording was removed from the DVR.
+Each function receives the absolute path of the removed audio file."
+  :type 'hook
   :group 'whisper-dvr)
 
 ;;; LLM post-processing settings
@@ -441,6 +505,156 @@ Displays appropriate message on success or error."
               (error-message-string err))
      nil)))
 
+;;; Automatic deletion helpers
+;;
+;; Think of the recording as a library book on loan.  It goes back to
+;; the shelf (the trash, or nowhere at all) only after the borrower has
+;; finished every chapter that was asked for.  When the LLM runs, the
+;; last chapter is the processed transcript.  When it does not, the
+;; last chapter is the raw transcript.
+
+(defvar whisper-dvr--auto-delete-armed-file nil
+  "Audio file waiting for deletion once its raw transcript is inserted.")
+
+(defvar whisper-dvr--auto-delete-ready nil
+  "Non-nil when the whisper run for the armed file produced a transcript.")
+
+(defvar whisper-dvr--llm-auto-delete-file nil
+  "Audio file to delete once the LLM result for its transcript arrives.")
+
+(defun whisper-dvr--dvr-locations ()
+  "Return the DVR locations as expanded directory names.
+The list holds `whisper-dvr-directory', `whisper-dvr-sd-card-directory',
+`whisper-dvr-internal-memory-directory', and every entry in
+`whisper-dvr-volume-mount-points'.  Empty and non-string entries are
+skipped."
+  (delete-dups
+   (delq nil
+         (mapcar (lambda (dir)
+                   (when (and (stringp dir) (not (string-empty-p dir)))
+                     (file-name-as-directory (expand-file-name dir))))
+                 (append (list whisper-dvr-directory
+                               whisper-dvr-sd-card-directory
+                               whisper-dvr-internal-memory-directory)
+                         whisper-dvr-volume-mount-points)))))
+
+(defun whisper-dvr--file-on-dvr-p (file)
+  "Return non-nil when FILE lies inside one of the DVR locations.
+The comparison ignores case on macOS and Windows, whose file systems
+usually do."
+  (let ((path (expand-file-name file))
+        (fold (memq system-type '(darwin windows-nt cygwin ms-dos))))
+    (cl-some (lambda (dir) (string-prefix-p dir path fold))
+             (whisper-dvr--dvr-locations))))
+
+(defun whisper-dvr--current-whisper-input-p (file)
+  "Return non-nil when the running whisper.el job transcribes FILE."
+  (and (stringp file)
+       (boundp 'whisper--ffmpeg-input-file)
+       (stringp (default-value 'whisper--ffmpeg-input-file))
+       (string= (expand-file-name (default-value 'whisper--ffmpeg-input-file))
+                (expand-file-name file))))
+
+(defun whisper-dvr--auto-delete-audio-file (file)
+  "Remove the processed recording FILE from the DVR.
+The method follows `whisper-dvr-auto-delete-method'.  A file outside
+the DVR locations, or one that no longer exists, is left alone.  Run
+`whisper-dvr-auto-delete-hook' and return t when the file was removed."
+  (let ((path (expand-file-name file)))
+    (cond
+     ((not (whisper-dvr--file-on-dvr-p path))
+      (message "whisper-dvr: kept %s because it is not on the DVR"
+               (file-name-nondirectory path))
+      nil)
+     ((not (file-exists-p path)) nil)
+     (t
+      (let ((whisper-dvr-use-trash (pcase whisper-dvr-auto-delete-method
+                                     ('trash t)
+                                     ('delete nil)
+                                     (_ whisper-dvr-use-trash))))
+        (when (whisper-dvr--delete-file-safely path)
+          (message "whisper-dvr: %s removed from the DVR after processing (%s)"
+                   (file-name-nondirectory path)
+                   (if whisper-dvr-use-trash "moved to trash" "deleted"))
+          (run-hook-with-args 'whisper-dvr-auto-delete-hook path)
+          t))))))
+
+(defun whisper-dvr--auto-delete-disarm ()
+  "Remove the deletion hooks and clear the transcription stage state."
+  (remove-hook 'whisper-after-transcription-hook
+               #'whisper-dvr--auto-delete-check-transcript)
+  (remove-hook 'whisper-after-insert-hook #'whisper-dvr--auto-delete-after-insert)
+  (setq whisper-dvr--auto-delete-armed-file nil
+        whisper-dvr--auto-delete-ready nil))
+
+(defun whisper-dvr--auto-delete-arm (audio-file llm-requested llm-armed)
+  "Prepare the removal of AUDIO-FILE after it has been processed.
+LLM-REQUESTED is non-nil when LLM post-processing was asked for in this
+run, and LLM-ARMED is non-nil when it was set up successfully.  Return
+the stage that triggers the removal, either the symbol `llm' or the
+symbol `transcription', or nil when the file will be kept."
+  (whisper-dvr--auto-delete-disarm)
+  (setq whisper-dvr--llm-auto-delete-file nil)
+  (let ((path (expand-file-name audio-file))
+        (mode whisper-dvr-auto-delete-audio))
+    (cond
+     ((null mode) nil)
+     ((not (whisper-dvr--file-on-dvr-p path)) nil)
+     ((and (not (eq mode 'after-transcription)) llm-requested (not llm-armed))
+      (message "whisper-dvr: %s stays on the DVR because the LLM step could not start"
+               (file-name-nondirectory path))
+      nil)
+     ((and (not (eq mode 'after-transcription)) llm-armed)
+      (setq whisper-dvr--llm-auto-delete-file path)
+      'llm)
+     (t
+      (setq whisper-dvr--auto-delete-armed-file path)
+      (add-hook 'whisper-after-transcription-hook
+                #'whisper-dvr--auto-delete-check-transcript 95)
+      (add-hook 'whisper-after-insert-hook
+                #'whisper-dvr--auto-delete-after-insert 95)
+      'transcription))))
+
+(defun whisper-dvr--auto-delete-check-transcript ()
+  "Note whether the whisper run for the armed file produced text.
+This function runs from `whisper-after-transcription-hook' in the
+whisper output buffer.  A run for some other file, or an empty
+transcript, cancels the pending removal."
+  (setq whisper-dvr--auto-delete-ready
+        (and (whisper-dvr--current-whisper-input-p
+              whisper-dvr--auto-delete-armed-file)
+             (not (string-blank-p
+                   (buffer-substring-no-properties (point-min) (point-max))))))
+  (unless whisper-dvr--auto-delete-ready
+    (whisper-dvr--auto-delete-disarm)))
+
+(defun whisper-dvr--auto-delete-after-insert ()
+  "Remove the armed recording now that its transcript is in place.
+This function runs from `whisper-after-insert-hook'."
+  (let ((file whisper-dvr--auto-delete-armed-file)
+        (ready whisper-dvr--auto-delete-ready))
+    (whisper-dvr--auto-delete-disarm)
+    (when (and file ready)
+      (whisper-dvr--auto-delete-audio-file file))))
+
+;;;###autoload
+(defun whisper-dvr-toggle-auto-delete (&optional choose)
+  "Toggle automatic deletion of processed recordings for this session.
+A nil value of `whisper-dvr-auto-delete-audio' becomes
+`after-processing', and any other value becomes nil.  With prefix
+argument CHOOSE, pick the value from a list instead."
+  (interactive "P")
+  (setq whisper-dvr-auto-delete-audio
+        (if choose
+            (let ((pick (completing-read
+                         "Delete recordings: "
+                         '("never" "after-processing" "after-transcription")
+                         nil t)))
+              (if (string= pick "never") nil (intern pick)))
+          (if whisper-dvr-auto-delete-audio nil 'after-processing)))
+  (message "whisper-dvr automatic deletion of recordings: %s"
+           (or whisper-dvr-auto-delete-audio "off")))
+
 ;;;###autoload
 (defun whisper-dvr (&optional toggle-llm)
   "List MP3 files from DVR and transcribe selected file with whisper.el.
@@ -450,7 +664,10 @@ The current buffer must be writable for this function to proceed.
 When `whisper-dvr-llm-postprocess' is non-nil, the raw transcript is
 then sent to the LLM chosen by `whisper-dvr-llm-backend', and the
 processed LaTeX replaces it.  A prefix argument TOGGLE-LLM inverts
-`whisper-dvr-llm-postprocess' for this run only."
+`whisper-dvr-llm-postprocess' for this run only.
+
+When `whisper-dvr-auto-delete-audio' is non-nil, the selected recording
+is removed from the DVR after it has been processed successfully."
   (interactive "P")
   ;; Check if current buffer is writable
   (when buffer-read-only
@@ -473,10 +690,11 @@ processed LaTeX replaces it.  A prefix argument TOGGLE-LLM inverts
            (selected-file (cdr (assoc selection file-alist))))
       (message "Transcribing %s with whisper..."
                (file-name-nondirectory selected-file))
-      (when (if toggle-llm
-                (not whisper-dvr-llm-postprocess)
-              whisper-dvr-llm-postprocess)
-        (whisper-dvr--llm-arm selected-file))
+      (let* ((want-llm (if toggle-llm
+                           (not whisper-dvr-llm-postprocess)
+                         whisper-dvr-llm-postprocess))
+             (llm-armed (and want-llm (whisper-dvr--llm-arm selected-file))))
+        (whisper-dvr--auto-delete-arm selected-file want-llm llm-armed))
       ;; Call whisper-run with the selected file
       (whisper-run selected-file))))
 
@@ -487,14 +705,16 @@ This is the non-interactive entry point that the batch and the
 automatic paths call.  `whisper-dvr-transcribe-complete-hook' runs with
 the audio path and the expected transcript path once `whisper-run'
 returns.  An interactive call also applies LLM post-processing when
-`whisper-dvr-llm-postprocess' is non-nil."
+`whisper-dvr-llm-postprocess' is non-nil, and removes a recording on
+the DVR afterwards when `whisper-dvr-auto-delete-audio' is non-nil."
   (interactive "fAudio file to transcribe: ")
   (let ((path (expand-file-name file)))
     (unless (file-readable-p path)
       (user-error "Cannot read audio file: %s" path))
-    (when (and whisper-dvr-llm-postprocess
-               (called-interactively-p 'interactive))
-      (whisper-dvr--llm-arm path))
+    (when (called-interactively-p 'interactive)
+      (let* ((want-llm whisper-dvr-llm-postprocess)
+             (llm-armed (and want-llm (whisper-dvr--llm-arm path))))
+        (whisper-dvr--auto-delete-arm path want-llm llm-armed)))
     (whisper-run path)
     (run-hook-with-args 'whisper-dvr-transcribe-complete-hook
                         path
@@ -2519,9 +2739,10 @@ markers are released afterwards."
     (set-marker beg nil)
     (set-marker end nil)))
 
-(defun whisper-dvr--llm-process-region-async (buffer beg end)
+(defun whisper-dvr--llm-process-region-async (buffer beg end &optional on-success)
   "Post-process the text between BEG and END in BUFFER in the background.
-BEG and END are positions or markers."
+BEG and END are positions or markers.  ON-SUCCESS, when non-nil, is a
+function of no arguments called after the result has been delivered."
   (with-current-buffer buffer
     (let* ((raw (buffer-substring-no-properties beg end))
            (mbeg (copy-marker beg t))
@@ -2530,7 +2751,8 @@ BEG and END are positions or markers."
           (whisper-dvr-llm-process-text
            raw
            (lambda (result)
-             (whisper-dvr--llm-deliver buffer mbeg mend raw result))
+             (whisper-dvr--llm-deliver buffer mbeg mend raw result)
+             (when on-success (funcall on-success)))
            (lambda (msg)
              (set-marker mbeg nil)
              (set-marker mend nil)
@@ -2566,16 +2788,13 @@ run, warn and return nil so that the plain transcription proceeds."
                #'whisper-dvr--llm-capture-transcript)
   (remove-hook 'whisper-after-insert-hook #'whisper-dvr--llm-after-insert)
   (setq whisper-dvr--llm-armed-file nil
-        whisper-dvr--llm-captured nil))
+        whisper-dvr--llm-captured nil
+        whisper-dvr--llm-auto-delete-file nil))
 
 (defun whisper-dvr--llm-armed-for-current-run-p ()
   "Return non-nil when the running whisper job is the armed one.
 This check keeps an abandoned arm from capturing an unrelated dictation."
-  (and whisper-dvr--llm-armed-file
-       (boundp 'whisper--ffmpeg-input-file)
-       (stringp (default-value 'whisper--ffmpeg-input-file))
-       (string= (expand-file-name (default-value 'whisper--ffmpeg-input-file))
-                whisper-dvr--llm-armed-file)))
+  (whisper-dvr--current-whisper-input-p whisper-dvr--llm-armed-file))
 
 (defun whisper-dvr--llm-capture-transcript ()
   "Record the finished raw transcript and its insertion point.
@@ -2594,18 +2813,24 @@ whisper output buffer."
   "Start LLM post-processing of the transcript whisper.el just inserted.
 This function runs from `whisper-after-insert-hook' in the buffer that
 received the text."
-  (let ((captured whisper-dvr--llm-captured))
+  (let ((captured whisper-dvr--llm-captured)
+        (audio whisper-dvr--llm-auto-delete-file))
     (whisper-dvr--llm-disarm)
     (when captured
       (condition-case err
-          (whisper-dvr--llm-dispatch-captured captured)
+          (whisper-dvr--llm-dispatch-captured
+           captured
+           (and audio
+                (lambda () (whisper-dvr--auto-delete-audio-file audio))))
         (error
          (message "whisper-dvr: LLM post-processing not started: %s"
                   (error-message-string err)))))))
 
-(defun whisper-dvr--llm-dispatch-captured (captured)
+(defun whisper-dvr--llm-dispatch-captured (captured &optional on-success)
   "Start post-processing for CAPTURED, a cons of (START . RAW).
-The current buffer is the one that received the raw transcript."
+The current buffer is the one that received the raw transcript.
+ON-SUCCESS, when non-nil, is a function of no arguments called after
+the processed text has been delivered."
   (let* ((start (car captured))
          (raw (cdr captured))
          (len (length raw)))
@@ -2618,15 +2843,19 @@ The current buffer is the one that received the raw transcript."
                (string= raw (buffer-substring-no-properties
                              start (+ start len))))
           (whisper-dvr--llm-process-region-async
-           (current-buffer) (marker-position start) (+ start len)))
+           (current-buffer) (marker-position start) (+ start len) on-success))
          ;; Text sent to a separate transcription buffer.
          ((and (boundp 'whisper-insert-text-at-point)
                (not (symbol-value 'whisper-insert-text-at-point)))
           (whisper-dvr--llm-process-region-async
-           (current-buffer) (point-min) (point-max)))
+           (current-buffer) (point-min) (point-max) on-success))
          ;; The inserted text cannot be located, so show the result apart.
          (t
-          (whisper-dvr-llm-process-text raw #'whisper-dvr--llm-show-in-buffer)))
+          (whisper-dvr-llm-process-text
+           raw
+           (lambda (result)
+             (whisper-dvr--llm-show-in-buffer result)
+             (when on-success (funcall on-success))))))
       (when (markerp start) (set-marker start nil)))))
 
 ;;;; Commands

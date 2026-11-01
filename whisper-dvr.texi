@@ -7,7 +7,7 @@
 @c %**end of header
 
 @copying
-This manual is for whisper-dvr (version 0.6.0).
+This manual is for whisper-dvr (version 0.7.0).
 
 Copyright @copyright{} 2024-2026 Blaine Mooers.
 
@@ -52,6 +52,7 @@ whisper.el.
 * Configuration::       Configuring whisper-dvr
 * Usage::               How to use whisper-dvr
 * LLM Post-Processing:: Structuring transcripts with an LLM
+* Automatic Deletion::  Removing processed recordings from the DVR
 * Customization::       Available customization options
 * Troubleshooting::     Common issues and solutions
 * Contributing::        How to contribute
@@ -229,6 +230,12 @@ With a prefix argument, save the value for later sessions.
 Transcribe one audio file without the selection menu.  This is the
 entry point used by batch transcription and by the automatic device
 handlers.
+
+@item whisper-dvr-toggle-auto-delete
+@findex whisper-dvr-toggle-auto-delete
+Turn automatic deletion of processed recordings on or off for the
+current session (@pxref{Automatic Deletion}).  With a prefix argument,
+pick the timing from a list.
 @end table
 
 @node LLM Post-Processing
@@ -462,6 +469,89 @@ several minutes.''  Set it to @code{nil} to show nothing.
 @item whisper-dvr-llm-after-process-hook
 @vindex whisper-dvr-llm-after-process-hook
 Functions called with the start and end of the inserted result.
+@end table
+
+@node Automatic Deletion
+@chapter Automatic Deletion
+@cindex automatic deletion
+@cindex deleting recordings
+
+Without this feature a session ends with three steps.  You transcribe
+the recording, delete it from the DVR, and eject the DVR.  When
+@code{whisper-dvr-auto-delete-audio} is non-nil, whisper-dvr removes
+the audio file from the DVR as soon as its processing has succeeded,
+so the next step is @kbd{M-x whisper-dvr-eject}.
+
+Think of the recording as a library book on loan.  It goes back to the
+shelf only after you have finished every chapter you asked for.  When
+the LLM runs, the last chapter is the parsed transcript.  When it does
+not, the last chapter is the raw transcript.
+
+@lisp
+(setq whisper-dvr-auto-delete-audio 'after-processing)
+;; Free the space on the recorder at once.
+(setq whisper-dvr-auto-delete-method 'delete)
+@end lisp
+
+@section When the recording is removed
+
+@table @code
+@item nil
+The recording is kept.  This is the default.
+
+@item after-processing
+The recording is removed once the last requested stage succeeds.  With
+LLM post-processing, that stage is the delivery of the parsed text, so
+a failed, timed out, or cancelled request keeps the file.  Without the
+LLM, the file is removed once the raw transcript is inserted.
+
+@item after-transcription
+The recording is removed as soon as whisper.el inserts a non-empty raw
+transcript, even when the LLM fails later.
+@end table
+
+@section Safety rules
+
+@itemize @bullet
+@item
+Only files inside a DVR location are removed.  These locations are
+@code{whisper-dvr-directory}, @code{whisper-dvr-sd-card-directory},
+@code{whisper-dvr-internal-memory-directory}, and the entries in
+@code{whisper-dvr-volume-mount-points}.
+@item
+An empty transcript keeps the file.
+@item
+A whisper.el run for a different file keeps the file.
+@item
+With @code{after-processing}, the file stays when LLM post-processing
+was requested but could not start.
+@item
+Only the interactive commands @code{whisper-dvr} and
+@code{whisper-dvr-transcribe-file} delete files.  Batch and automatic
+transcription do not.
+@end itemize
+
+@section Deletion settings
+@cindex customization, automatic deletion
+
+@table @code
+@item whisper-dvr-auto-delete-audio
+@vindex whisper-dvr-auto-delete-audio
+When to remove a processed recording.  One of @code{nil},
+@code{after-processing}, or @code{after-transcription}.  Default
+@code{nil}.
+
+@item whisper-dvr-auto-delete-method
+@vindex whisper-dvr-auto-delete-method
+How the recording is removed.  The value @code{default} follows
+@code{whisper-dvr-use-trash}, @code{trash} always uses the trash, and
+@code{delete} removes the file permanently.  A file trashed from a
+removable volume may stay on that volume in a hidden trash folder, so
+@code{delete} is the choice that frees the space at once.
+
+@item whisper-dvr-auto-delete-hook
+@vindex whisper-dvr-auto-delete-hook
+Functions called with the path of each removed recording.
 @end table
 
 @node Customization

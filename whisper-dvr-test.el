@@ -1329,5 +1329,234 @@
   (whisper-dvr-test--with-llm-defaults
     (should-error (whisper-dvr-llm-process-text "  \n" #'ignore) :type 'user-error)))
 
+;;; ============================================================
+;;; Unit Tests: Automatic deletion of processed recordings
+;;; ============================================================
+
+(defmacro whisper-dvr-test--with-dvr-recording (var &rest body)
+  "Bind VAR to a recording inside a temporary DVR directory, then run BODY.
+The DVR settings point at the temporary directory, deletion is
+permanent, and the directory is removed afterwards."
+  (declare (indent 1) (debug t))
+  `(let* ((dvr (file-name-as-directory (make-temp-file "wdvr-dvr" t)))
+          (,var (expand-file-name "REC001.mp3" dvr))
+          (whisper-dvr-directory dvr)
+          (whisper-dvr-sd-card-directory "/nonexistent/sd/")
+          (whisper-dvr-internal-memory-directory "/nonexistent/internal/")
+          (whisper-dvr-volume-mount-points nil)
+          (whisper-dvr-auto-delete-audio 'after-processing)
+          (whisper-dvr-auto-delete-method 'delete)
+          (whisper-dvr-auto-delete-hook nil)
+          (whisper-dvr--auto-delete-armed-file nil)
+          (whisper-dvr--auto-delete-ready nil)
+          (whisper-dvr--llm-auto-delete-file nil))
+     (unwind-protect
+         (progn
+           (with-temp-file ,var (insert "fake audio"))
+           ,@body)
+       (whisper-dvr--auto-delete-disarm)
+       (setq-default whisper--ffmpeg-input-file nil)
+       (delete-directory dvr t))))
+
+(defun whisper-dvr-test--simulate-whisper (audio text)
+  "Simulate whisper.el transcribing AUDIO into TEXT at point.
+Run the transcription hook in an output buffer, insert TEXT, and run
+the insert hook in the current buffer."
+  (setq-default whisper--ffmpeg-input-file audio)
+  (setq whisper--marker (point-marker))
+  (let ((target (current-buffer)))
+    (with-temp-buffer
+      (insert text)
+      (run-hooks 'whisper-after-transcription-hook))
+    (with-current-buffer target
+      (save-excursion (goto-char whisper--marker) (insert text))
+      (run-hooks 'whisper-after-insert-hook))))
+
+(ert-deftest whisper-dvr-test-auto-delete-defaults ()
+  "Test that automatic deletion is opt-in and follows the trash setting."
+  (should (null (eval (car (get 'whisper-dvr-auto-delete-audio 'standard-value)))))
+  (should (eq (eval (car (get 'whisper-dvr-auto-delete-method 'standard-value)))
+              'default)))
+
+(ert-deftest whisper-dvr-test-auto-delete-file-on-dvr-p ()
+  "Test that only files inside a DVR location count as on the DVR."
+  (whisper-dvr-test--with-dvr-recording rec
+    (should (whisper-dvr--file-on-dvr-p rec))
+    (should-not (whisper-dvr--file-on-dvr-p "/home/someone/notes/REC001.mp3"))
+    (let ((whisper-dvr-volume-mount-points '("/Volumes/IC RECORDER")))
+      (should (whisper-dvr--file-on-dvr-p
+               "/Volumes/IC RECORDER/REC_FILE/FOLDER01/a.mp3")))
+    (should-not (whisper-dvr--file-on-dvr-p
+                 (concat (directory-file-name whisper-dvr-directory) "-other/a.mp3")))))
+
+(ert-deftest whisper-dvr-test-auto-delete-removes-file-on-dvr ()
+  "Test that a processed recording on the DVR is deleted and the hook runs."
+  (whisper-dvr-test--with-dvr-recording rec
+    (let* ((seen nil)
+           (whisper-dvr-auto-delete-hook (list (lambda (f) (setq seen f))))
+           (inhibit-message t))
+      (should (whisper-dvr--auto-delete-audio-file rec))
+      (should-not (file-exists-p rec))
+      (should (equal seen rec)))))
+
+(ert-deftest whisper-dvr-test-auto-delete-keeps-file-off-dvr ()
+  "Test that a recording outside the DVR locations is never removed."
+  (whisper-dvr-test--with-dvr-recording rec
+    (let ((elsewhere (make-temp-file "wdvr-local" nil ".mp3"))
+          (inhibit-message t))
+      (unwind-protect
+          (progn
+            (should-not (whisper-dvr--auto-delete-audio-file elsewhere))
+            (should (file-exists-p elsewhere))
+            (should (file-exists-p rec)))
+        (delete-file elsewhere)))))
+
+(ert-deftest whisper-dvr-test-auto-delete-method-controls-trash ()
+  "Test that the deletion method overrides `whisper-dvr-use-trash'."
+  (whisper-dvr-test--with-dvr-recording rec
+    (let ((trashed nil)
+          (inhibit-message t))
+      (cl-letf (((symbol-function 'move-file-to-trash)
+                 (lambda (f) (setq trashed f) (delete-file f))))
+        (let ((whisper-dvr-auto-delete-method 'trash)
+              (whisper-dvr-use-trash nil))
+          (whisper-dvr--auto-delete-audio-file rec)
+          (should (equal trashed rec)))
+        (with-temp-file rec (insert "again"))
+        (setq trashed nil)
+        (let ((whisper-dvr-auto-delete-method 'delete)
+              (whisper-dvr-use-trash t))
+          (whisper-dvr--auto-delete-audio-file rec)
+          (should-not trashed)
+          (should-not (file-exists-p rec)))
+        (with-temp-file rec (insert "third"))
+        (let ((whisper-dvr-auto-delete-method 'default)
+              (whisper-dvr-use-trash t))
+          (whisper-dvr--auto-delete-audio-file rec)
+          (should (equal trashed rec)))))))
+
+(ert-deftest whisper-dvr-test-auto-delete-arm-stages ()
+  "Test the stage chosen by each combination of settings."
+  (whisper-dvr-test--with-dvr-recording rec
+    (let ((inhibit-message t))
+      (let ((whisper-dvr-auto-delete-audio nil))
+        (should-not (whisper-dvr--auto-delete-arm rec nil nil)))
+      (should (eq (whisper-dvr--auto-delete-arm rec nil nil) 'transcription))
+      (should (eq (whisper-dvr--auto-delete-arm rec t t) 'llm))
+      (should (equal whisper-dvr--llm-auto-delete-file rec))
+      (should-not (whisper-dvr--auto-delete-arm rec t nil))
+      (should-not whisper-dvr--llm-auto-delete-file)
+      (let ((whisper-dvr-auto-delete-audio 'after-transcription))
+        (should (eq (whisper-dvr--auto-delete-arm rec t t) 'transcription))
+        (should (eq (whisper-dvr--auto-delete-arm rec t nil) 'transcription)))
+      (should-not (whisper-dvr--auto-delete-arm "/elsewhere/a.mp3" nil nil)))))
+
+(ert-deftest whisper-dvr-test-auto-delete-after-raw-transcript ()
+  "Test that the recording goes once whisper inserts the raw transcript."
+  (whisper-dvr-test--with-dvr-recording rec
+    (let ((inhibit-message t))
+      (with-temp-buffer
+        (whisper-dvr--auto-delete-arm rec nil nil)
+        (whisper-dvr-test--simulate-whisper rec "spoken words")
+        (should (equal (buffer-string) "spoken words")))
+      (should-not (file-exists-p rec))
+      (should-not (memq #'whisper-dvr--auto-delete-after-insert
+                        (default-value 'whisper-after-insert-hook))))))
+
+(ert-deftest whisper-dvr-test-auto-delete-keeps-file-on-empty-transcript ()
+  "Test that an empty transcript leaves the recording on the DVR."
+  (whisper-dvr-test--with-dvr-recording rec
+    (with-temp-buffer
+      (whisper-dvr--auto-delete-arm rec nil nil)
+      (whisper-dvr-test--simulate-whisper rec "  \n"))
+    (should (file-exists-p rec))))
+
+(ert-deftest whisper-dvr-test-auto-delete-ignores-unrelated-run ()
+  "Test that a transcription of another file does not remove the recording."
+  (whisper-dvr-test--with-dvr-recording rec
+    (with-temp-buffer
+      (whisper-dvr--auto-delete-arm rec nil nil)
+      (whisper-dvr-test--simulate-whisper "/tmp/other.mp3" "dictation"))
+    (should (file-exists-p rec))
+    (should-not whisper-dvr--auto-delete-armed-file)))
+
+(ert-deftest whisper-dvr-test-auto-delete-after-llm-success ()
+  "Test that the recording goes only after the LLM result is delivered."
+  (whisper-dvr-test--with-llm-defaults
+    (whisper-dvr-test--with-dvr-recording rec
+      (let ((whisper-dvr-llm-backend 'function)
+            (whisper-dvr-llm-function
+             (lambda (_instructions text callback _errback)
+               (should (file-exists-p rec))
+               (funcall callback (upcase text)))))
+        (with-temp-buffer
+          (let ((armed (whisper-dvr--llm-arm rec)))
+            (should (eq (whisper-dvr--auto-delete-arm rec t armed) 'llm)))
+          (whisper-dvr-test--simulate-whisper rec "spoken words")
+          (should (equal (buffer-string) "SPOKEN WORDS")))
+        (should-not (file-exists-p rec))
+        (should-not whisper-dvr--llm-auto-delete-file)))))
+
+(ert-deftest whisper-dvr-test-auto-delete-keeps-file-after-llm-failure ()
+  "Test that a failed LLM request keeps the recording on the DVR."
+  (whisper-dvr-test--with-llm-defaults
+    (whisper-dvr-test--with-dvr-recording rec
+      (let ((whisper-dvr-llm-backend 'function)
+            (whisper-dvr-llm-function
+             (lambda (_instructions _text _callback errback)
+               (funcall errback "server unavailable"))))
+        (with-temp-buffer
+          (whisper-dvr--auto-delete-arm rec t (whisper-dvr--llm-arm rec))
+          (whisper-dvr-test--simulate-whisper rec "spoken words")
+          (should (equal (buffer-string) "spoken words")))
+        (should (file-exists-p rec))))))
+
+(ert-deftest whisper-dvr-test-auto-delete-after-transcription-ignores-llm-failure ()
+  "Test that the after-transcription setting removes the file despite the LLM."
+  (whisper-dvr-test--with-llm-defaults
+    (whisper-dvr-test--with-dvr-recording rec
+      (let ((whisper-dvr-auto-delete-audio 'after-transcription)
+            (whisper-dvr-llm-backend 'function)
+            (whisper-dvr-llm-function
+             (lambda (_instructions _text _callback errback)
+               (funcall errback "server unavailable"))))
+        (with-temp-buffer
+          (whisper-dvr--auto-delete-arm rec t (whisper-dvr--llm-arm rec))
+          (whisper-dvr-test--simulate-whisper rec "spoken words"))
+        (should-not (file-exists-p rec))))))
+
+(ert-deftest whisper-dvr-test-auto-delete-whisper-dvr-arms ()
+  "Test that `whisper-dvr' arms deletion for the selected recording."
+  (whisper-dvr-test--with-llm-defaults
+    (let ((args nil)
+          (whisper-dvr-directory "/test/dir"))
+      (cl-letf (((symbol-function 'whisper-dvr--list-audio-files)
+                 (lambda () '("/test/dir/a.mp3")))
+                ((symbol-function 'whisper-dvr--format-file-entry)
+                 (lambda (f) (file-name-nondirectory f)))
+                ((symbol-function 'completing-read) (lambda (&rest _) "a.mp3"))
+                ((symbol-function 'buffer-file-name) (lambda (&rest _) "/x.tex"))
+                ((symbol-function 'whisper-run) #'ignore)
+                ((symbol-function 'whisper-dvr--llm-arm) (lambda (_f) t))
+                ((symbol-function 'whisper-dvr--auto-delete-arm)
+                 (lambda (&rest a) (setq args a))))
+        (whisper-dvr)
+        (should (equal args '("/test/dir/a.mp3" nil nil)))
+        (whisper-dvr '(4))
+        (should (equal args '("/test/dir/a.mp3" t t)))))))
+
+(ert-deftest whisper-dvr-test-auto-delete-toggle ()
+  "Test the interactive toggle for automatic deletion."
+  (let ((whisper-dvr-auto-delete-audio nil)
+        (inhibit-message t))
+    (whisper-dvr-toggle-auto-delete)
+    (should (eq whisper-dvr-auto-delete-audio 'after-processing))
+    (whisper-dvr-toggle-auto-delete)
+    (should-not whisper-dvr-auto-delete-audio)
+    (cl-letf (((symbol-function 'completing-read)
+               (lambda (&rest _) "after-transcription")))
+      (whisper-dvr-toggle-auto-delete '(4))
+      (should (eq whisper-dvr-auto-delete-audio 'after-transcription)))))
+
 (provide 'whisper-dvr-test)
 ;;; whisper-dvr-test.el ends here
