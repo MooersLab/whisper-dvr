@@ -5,7 +5,7 @@
 ;; URL: https://github.com/MooersLab/whisper-dvr
 ;; Keywords: multimedia, convenience
 ;; Package-Requires: ((emacs "27.1") (whisper "0.1"))
-;; Version: 0.7.0
+;; Version: 0.8.0
 
 ;;; Commentary:
 ;; This package provides functions to list, transcribe, and manage MP3 files
@@ -25,6 +25,15 @@
 ;; removed from the DVR once its transcript has been inserted and, when
 ;; the LLM runs, once the processed text has been delivered.  The
 ;; recorder is then empty and ready to eject with `whisper-dvr-eject'.
+;;
+;; Version 0.8.0 adds text replacements from a Voice-In Plus CSV
+;; export.  When `whisper-dvr-replacements-file' is set, contractions
+;; are expanded and misheard words are corrected in each transcript
+;; before it is inserted and before the LLM sees it.  The commands
+;; `whisper-dvr-replacements-apply-region',
+;; `whisper-dvr-replacements-apply-buffer', and
+;; `whisper-dvr-replacements-apply-file' apply the same rules to any
+;; text.  See whisper-dvr-replacements.el.
 
 ;;; Code:
 
@@ -35,6 +44,7 @@
 (require 'json)
 (require 'url-parse)
 (require 'auth-source)
+(require 'whisper-dvr-replacements)
 
 ;; Functions and variables that live in optional or lazily loaded
 ;; libraries.  These declarations keep the byte compiler quiet without
@@ -694,6 +704,7 @@ is removed from the DVR after it has been processed successfully."
                            (not whisper-dvr-llm-postprocess)
                          whisper-dvr-llm-postprocess))
              (llm-armed (and want-llm (whisper-dvr--llm-arm selected-file))))
+        (whisper-dvr-replacements--arm selected-file llm-armed)
         (whisper-dvr--auto-delete-arm selected-file want-llm llm-armed))
       ;; Call whisper-run with the selected file
       (whisper-run selected-file))))
@@ -714,6 +725,7 @@ the DVR afterwards when `whisper-dvr-auto-delete-audio' is non-nil."
     (when (called-interactively-p 'interactive)
       (let* ((want-llm whisper-dvr-llm-postprocess)
              (llm-armed (and want-llm (whisper-dvr--llm-arm path))))
+        (whisper-dvr-replacements--arm path llm-armed)
         (whisper-dvr--auto-delete-arm path want-llm llm-armed)))
     (whisper-run path)
     (run-hook-with-args 'whisper-dvr-transcribe-complete-hook
@@ -1118,9 +1130,9 @@ This function should be called from a Dired buffer."
                    (length marked-files))
           (revert-buffer))))))
 
-;; Define key binding for dired-mode
-(with-eval-after-load 'dired
-  (define-key dired-mode-map (kbd "C-c C-d") #'whisper-dvr-dired-delete-marked))
+;; Define key binding for dired-mode.  The file requires dired at the
+;; top, so `dired-mode-map' already exists here.
+(define-key dired-mode-map (kbd "C-c C-d") #'whisper-dvr-dired-delete-marked)
 ;;; Advanced feature configuration
 
 (defgroup whisper-dvr-advanced nil
@@ -2281,9 +2293,18 @@ The body of `whisper-dvr-llm-skill-file' is preferred.  The text of
                      (whisper-dvr--llm-strip-front-matter (buffer-string)))
                  whisper-dvr-llm-default-instructions)))
     (concat (string-trim body)
+            (let ((note (whisper-dvr-replacements-llm-note)))
+              (if note (concat "\n\n" note) ""))
             "\n\nThe transcript is supplied inline in the user message."
             "  Return only the processed LaTeX fragment,"
             " with no commentary and no code fences.")))
+
+(defun whisper-dvr--llm-claude-prompt ()
+  "Return the prompt for the `claude-code' backend.
+The note about text replacements is added when they are active."
+  (let ((note (whisper-dvr-replacements-llm-note)))
+    (concat (format whisper-dvr-llm-claude-prompt whisper-dvr-llm-skill-name)
+            (if note (concat "  " note) ""))))
 
 (defun whisper-dvr--llm-user-message (transcript)
   "Wrap TRANSCRIPT in the user message sent to the HTTP backends."
@@ -2390,8 +2411,7 @@ The spec is a plist with the keys :command, :stdin, :parser,
     ('claude-code
      (list :command (append (list (whisper-dvr--llm-program
                                    whisper-dvr-llm-claude-program)
-                                  "-p" (format whisper-dvr-llm-claude-prompt
-                                               whisper-dvr-llm-skill-name))
+                                  "-p" (whisper-dvr--llm-claude-prompt))
                             (when whisper-dvr-llm-model
                               (list "--model" whisper-dvr-llm-model))
                             (when whisper-dvr-llm-claude-embed-skill
@@ -2864,11 +2884,14 @@ the processed text has been delivered."
 (defun whisper-dvr-llm-process-region (beg end)
   "Post-process the transcript between BEG and END with the LLM.
 Without an active region the whole buffer is processed.  The result
-is placed according to `whisper-dvr-llm-insert-method'."
+is placed according to `whisper-dvr-llm-insert-method'.  When
+`whisper-dvr-replacements-before-llm-commands' is non-nil, the text
+replacements are applied to the region first."
   (interactive
    (if (use-region-p)
        (list (region-beginning) (region-end))
      (list (point-min) (point-max))))
+  (setq end (whisper-dvr-replacements-prepare-region-for-llm beg end))
   (whisper-dvr--llm-process-region-async (current-buffer) beg end))
 
 ;;;###autoload
@@ -2876,13 +2899,16 @@ is placed according to `whisper-dvr-llm-insert-method'."
   "Post-process the transcript in FILE and write FILE_parsed.tex beside it.
 For example notes.txt yields notes_parsed.tex, which matches the
 convention of the transcript-parser skill.  With prefix argument OPEN,
-visit the new file when it is ready."
+visit the new file when it is ready.  The text replacements are
+applied to the text sent to the LLM when
+`whisper-dvr-replacements-before-llm-commands' is non-nil."
   (interactive "fTranscript file: \nP")
   (let* ((path (expand-file-name file))
          (out (whisper-dvr-llm-parsed-file-name path))
-         (text (with-temp-buffer
-                 (insert-file-contents path)
-                 (buffer-string))))
+         (text (whisper-dvr-replacements-apply-for-llm
+                (with-temp-buffer
+                  (insert-file-contents path)
+                  (buffer-string)))))
     (whisper-dvr-llm-process-text
      text
      (lambda (result)
@@ -2985,6 +3011,7 @@ The raw transcripts stay in place."
 Functions receive (audio-file transcript-file) as arguments.")
 
 ;; Define mode for advanced features
+;;;###autoload
 (define-minor-mode whisper-dvr-mode
   "Minor mode for whisper-dvr with advanced features."
   :lighter " DVR"

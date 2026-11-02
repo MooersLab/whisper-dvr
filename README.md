@@ -1,4 +1,4 @@
-![Version](https://img.shields.io/static/v1?label=whisper-dvr&message=0.7&color=brightcolor)
+![Version](https://img.shields.io/static/v1?label=whisper-dvr&message=0.8&color=brightcolor)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Emacs](https://img.shields.io/badge/Emacs-27.1+-purple.svg)](https://www.gnu.org/software/emacs/)
 
@@ -12,6 +12,9 @@ I have used it for about 1000 hours.
 As of version 0.6, you can process that transcript by sending it to an LLM, applying a transcript-parser skill, and returning the parsed transcript with a TODO list at the bottom.
 You can do live transcription with the whisperer package.EL by running the whisper–run command.
 You can select the directly dictated transcript, make a region from it, and then run the library command M-x whisper-dvr-llm-process-region to apply the transcript parser skill.
+
+As of version 0.8, the transcript first passes through your Voice-In Plus text replacements, which expand contractions and fix words that Whisper mishears.
+The same replacements can be applied to any region, buffer, or file, and a companion Claude skill applies them outside Emacs.
 
 I have everything set up to work with LaTeX, which is more capable than Markdown.
 Nonetheless, you can translate the LaTeX into Markdown using Pandoc or an LLM.
@@ -40,6 +43,9 @@ It reduces friction when transcribing multiple audio files daily, such as those 
   - [Tutorial: Turning on post-processing with Claude Code](#tutorial-turning-on-post-processing-with-claude-code)
   - [Choosing the model or harness](#choosing-the-model-or-harness)
 - [Automatic Deletion of Processed Recordings](#automatic-deletion-of-processed-recordings)
+- [Text Replacements](#text-replacements)
+  - [Tutorial: turning on text replacements](#tutorial-turning-on-text-replacements)
+  - [Text that did not come from the DVR](#text-that-did-not-come-from-the-dvr)
 - [Commands](#commands)
 - [Testing](#testing)
   - [Tutorial: Running the Test Suite](#tutorial-running-the-test-suite)
@@ -56,6 +62,7 @@ It reduces friction when transcribing multiple audio files daily, such as those 
 - **Optional LLM post-processing** that turns the raw transcript into structured LaTeX with the transcript-parser skill, using Claude Code, the Anthropic API, a local model, any command line harness, or an Emacs Lisp function
 - **Bulk clearing** of every audio file on the DVR in one operation, with trash support
 - **Optional automatic deletion** of each recording from the DVR once it has been transcribed and, when the LLM runs, parsed, so the recorder is empty and ready to eject
+- **Text replacements** from a Voice-In Plus export that expand contractions and fix misheard words before the LLM runs, also available for any region, buffer, or file, and as a Claude skill
 - **Comprehensive test suite** with unit and integration tests
 
 ## Requirements
@@ -571,6 +578,103 @@ Choose `delete` when you want the space back at once.
 | `whisper-dvr-auto-delete-method` | `default` | `default`, `trash`, or `delete` |
 | `whisper-dvr-auto-delete-hook` | `nil` | Functions called with the path of each removed recording |
 
+## Text Replacements
+
+Speech recognition makes the same mistakes again and again.
+It writes "settle cassin" for zettelkasten and "abernishio" for *ab initio*, and it leaves every contraction in place.
+Version 0.8.0 fixes these errors before the LLM sees the transcript, so less editing is left at the end.
+The rules come from the CSV file that the Voice-In Plus Chrome extension exports, with the trigger in the first column and the replacement in the second.
+
+Think of the step as a proofreader with a phrase book.
+The proofreader reads one word at a time, always tries the longest phrase in the book first, and never rereads a correction, so one replacement cannot set off another.
+
+### Why only some rules are applied
+
+A Voice-In table mixes corrections with dictation commands.
+A command fires only when you say it on purpose, but a recording holds whatever you said while driving.
+So every rule is sorted into a tier, and only safe tiers are applied.
+
+| Tier | Example trigger | Applied by default |
+|------|-----------------|--------------------|
+| `contraction` | can't | Yes |
+| `correction` | settle cassin | Yes |
+| `expansion` | expand saxs | No, add it to `whisper-dvr-replacements-tiers` |
+| `command` | insert python code | Never |
+| `action` | open pdb | Never |
+| `template` | begin day | Never |
+
+A deny list removes corrections whose trigger is an ordinary word, such as `may` → May or `riding` → writing.
+The skill script `audit_rules.py` proposes this list from English word frequencies.
+
+### Contractions
+
+Contractions that end in 's or 'd are read from the next word, using the rules of expand-contractions.el.
+"I'd like" becomes "I would like", "I'd never seen" becomes "I had never seen", and "he's been" becomes "he has been".
+The `contractions.csv` table from expand-contractions.el can be loaded after the Voice-In export.
+It holds 248 entries and corrects several Voice-In rules, such as `won't` and `doesn't`.
+
+### Tutorial: turning on text replacements
+
+1. Export your replacements from Voice-In Plus and save the file as `skills/voice-in-replacements/data/replacements.csv`.
+2. Build the deny list.
+
+   ```bash
+   make skill-data
+   ```
+
+3. Read `skills/voice-in-replacements/data/deny.txt` and delete any line whose rule you want to keep.
+4. Add the following to your init file.
+
+   ```elisp
+   (let ((data "~/6112MooersLabGitHubLabRepos/whisper-dvr/skills/voice-in-replacements/data/"))
+     (setq whisper-dvr-replacements-file (concat data "replacements.csv")
+           whisper-dvr-replacements-extra-files
+           (list (concat data "contractions.csv")
+                 (concat data "whisper-extra.csv"))
+           whisper-dvr-replacements-deny-file (concat data "deny.txt")))
+   ```
+
+5. Run `M-x whisper-dvr` as usual.
+   The transcript is corrected before it is inserted, and the LLM receives the corrected text.
+
+The raw text of every pass is kept in the buffer `*whisper-dvr-replacements*`, which `M-x whisper-dvr-replacements-show-log` displays.
+Set `whisper-dvr-replacements-log-file` to keep the same record in a file.
+
+### Text that did not come from the DVR
+
+The same rules work on any text.
+
+- `M-x whisper-dvr-replacements-apply-region` changes the selected text.
+- `M-x whisper-dvr-replacements-apply-buffer` changes the whole buffer, or the visible part of a narrowed buffer.
+- `M-x whisper-dvr-replacements-apply-file` writes `notes-replaced.txt` beside `notes.txt` and leaves the original alone.
+
+Each command is one undo step.
+`whisper-dvr-llm-process-region` and `whisper-dvr-llm-process-file` also apply the replacements before they call the LLM, unless `whisper-dvr-replacements-before-llm-commands` is nil.
+
+### The Claude skill
+
+`skills/voice-in-replacements` holds a Claude skill with a Python copy of the same engine.
+It cleans text that never passes through Emacs, such as a MacWhisper export or a pasted draft.
+`make skill-zip` packages it for upload.
+Both engines pass the cases in `skills/voice-in-replacements/tests/replacement-cases.tsv`, and they give byte-identical output on the full rule set.
+
+### Text replacement settings
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `whisper-dvr-replacements-enabled` | `t` | Apply the rules to new transcripts |
+| `whisper-dvr-replacements-file` | `nil` | The Voice-In Plus CSV export |
+| `whisper-dvr-replacements-extra-files` | `nil` | Later rule files, which override earlier ones |
+| `whisper-dvr-replacements-deny-file` | `nil` | Triggers that must never fire |
+| `whisper-dvr-replacements-tiers` | `(contraction correction)` | Tiers that are applied |
+| `whisper-dvr-replacements-context` | `t` | Read 's and 'd contractions from the next word |
+| `whisper-dvr-replacements-skip-ambiguous` | `when-llm` | Leave I'd and it's for the LLM when it runs |
+| `whisper-dvr-replacements-before-llm-commands` | `t` | Apply the rules in the LLM region and file commands |
+| `whisper-dvr-replacements-log` | `t` | Record each pass in `*whisper-dvr-replacements*` |
+| `whisper-dvr-replacements-log-file` | `nil` | Also append each record to this file |
+| `whisper-dvr-replacements-date-format` | `"%Y-%m-%d"` | Format for the `<date>` code |
+| `whisper-dvr-replacements-llm-note` | A short note | Added to the LLM instructions while replacements are active |
+
 ## Commands
 
 | Command | Description |
@@ -589,6 +693,12 @@ Choose `delete` when you want the space back at once.
 | `whisper-dvr-llm-cancel` | Cancel running LLM requests |
 | `whisper-dvr-llm-test-backend` | Send a short sample transcript to check the backend |
 | `whisper-dvr-llm-show-log` | Show the command, exit code, stderr, and stdout of each LLM run |
+| `whisper-dvr-replacements-apply-region` | Apply the text replacements to the selected text |
+| `whisper-dvr-replacements-apply-buffer` | Apply the text replacements to the whole buffer |
+| `whisper-dvr-replacements-apply-file` | Write `FILE-replaced.txt` with the replacements applied |
+| `whisper-dvr-replacements-reload` | Reread the rule files |
+| `whisper-dvr-replacements-audit` | Show tier counts, active rules, and data problems |
+| `whisper-dvr-replacements-show-log` | Show the raw text and the replacements of each pass |
 
 ### whisper-dvr
 
@@ -681,7 +791,8 @@ finishes.
 
 ## Testing
 
-The package includes a comprehensive ERT test suite in `whisper-dvr-test.el`.
+The package includes a comprehensive ERT test suite in `whisper-dvr-test.el` and `whisper-dvr-replacements-test.el`.
+The Claude skill has a pytest suite in `skills/voice-in-replacements/tests`, which needs Python 3 and pytest.
 
 ### Tutorial: Running the Test Suite
 
@@ -709,6 +820,9 @@ make test-llm
 
 # Run only the automatic deletion tests
 make test-auto-delete
+
+# Run the text replacement tests in Emacs Lisp and in Python
+make test-replacements
 ```
 
 #### Running Tests from Emacs
@@ -769,6 +883,7 @@ F whisper-dvr-test-default-directory
 | Edge Cases | 3 | Unusual inputs |
 | LLM Post-Processing | 41 | Settings, request building, response parsing, delivery, subprocess runs, timeouts, and the whisper.el hook flow |
 | Automatic Deletion | 14 | DVR location check, deletion method, the stage that triggers removal, the whisper.el and LLM hook flows, and the toggle |
+| Text Replacements | 20 | CSV parsing, tiers, the shared cases, context rules for contractions, the cache, the region, buffer, and file commands, the log, and the whisper.el hook |
 
 #### Running Linting Checks
 
@@ -791,14 +906,17 @@ For CI/CD pipelines, use:
 make check
 ```
 
-This runs byte-compilation, linting, and tests in sequence.
+This runs byte-compilation, linting, the ERT tests, and the Python tests in sequence.
 
 ## File Structure
 
 ```
 whisper-dvr/
 ├── whisper-dvr.el          # Main package file
+├── whisper-dvr-replacements.el       # Text replacement engine
 ├── whisper-dvr-test.el     # ERT test suite
+├── whisper-dvr-replacements-test.el  # Text replacement tests
+├── skills/voice-in-replacements/     # Claude skill with the Python engine
 ├── whisper-dvr.texi        # Texinfo documentation source
 ├── whisper-dvr.info        # Compiled Info manual (generated)
 ├── Makefile                # Build and test automation
@@ -907,6 +1025,7 @@ I intend to do so soon.
 | Version 0.5.0 | Added `whisper-dvr-set-directory-to-sd-card` and `whisper-dvr-set-directory-to-internal-memory`, which switch the recording location without retyping a path, plus a prefix argument that saves the choice. Defined four functions and four variables that were called but never defined, so background monitoring, automatic transcription, and mobile sync no longer fail with a void-function error. Fixed the `let` that needed to be `let*` in `whisper-dvr-list-remote-devices`, the duplicate Dropbox token prompt, and the discarded reason in the failure notification. `make compile` and `checkdoc` now run clean, and the suite grew from 31 tests to 50. | 9/9/2026 |
 | Version 0.6.0 | Added optional LLM post-processing of transcripts with the transcript-parser skill. New settings choose whether to post-process and which LLM runs the skill, including Claude Code as a harness, the Anthropic API, local models behind an OpenAI-compatible server such as Ollama, any command-line tool, or an Emacs Lisp function. New commands process a region or a transcript file, toggle the feature, switch the backend, and cancel requests. The suite grew from 50 tests to 91. | 10/4/2026 |
 | Version 0.7.0 | Added optional automatic deletion of each recording from the DVR after it has been processed, which removes the manual deletion step before ejecting the recorder. The new option `whisper-dvr-auto-delete-audio` removes the file after the last requested stage succeeds or right after the raw transcript is inserted. `whisper-dvr-auto-delete-method` chooses the trash or permanent deletion, and `whisper-dvr-toggle-auto-delete` switches the feature for a session. Only files on the DVR are ever removed. The suite grew from 91 tests to 105. | 11/1/2026 |
+| Version 0.8.0 | Added text replacements from a Voice-In Plus export in the new library `whisper-dvr-replacements.el`. Each transcript is corrected after whisper.el finishes and before the LLM runs. Rules are sorted into tiers so that dictation commands never fire, a deny list blocks ordinary words, and contractions ending in 's or 'd are read from the next word. The contractions.csv table from expand-contractions.el loads as an override layer. New commands apply the rules to a region, a buffer, or a file. A companion Claude skill, voice-in-replacements, applies the same rules outside Emacs with byte-identical output. The suite grew from 105 tests to 125. | 11/1/2026 |
 
 ## Sources of funding
 

@@ -1,0 +1,34 @@
+# Synthetic rules for the shared replacement tests.  Not personal data.
+can't,cannot
+don't,do not
+it's,it is
+i'd,I had
+he's,he is
+you'd,you would
+'cause,because
+let's,let us
+settle cassin,zettelkasten
+settle,SETTLE-SHOULD-NOT-WIN
+cassin,CASSIN-SHOULD-NOT-WIN
+emacs,Emacs
+emax,Emacs
+crystalography,crystallography
+p21,$P2_{1}$
+ab initio,\emph{ab initio}
+w.r.t.,with respect to
+"dags,",DAGs
+alpha fold two,AlphaFold2
+alpha fold,AlphaFold
+cobra,COBRE
+cyclic,"one-way cycle"
+one-way,LOOP-SHOULD-NOT-FIRE
+expand saxs,small-angle X-ray scattering
+open pdb,<open:https://www.rcsb.org/>
+insert python code,"\begin{code}
+<<Paste code here>>
+\end{code}"
+new sentence,. <newline>
+red||crimson,ROJO
+  padded trigger  ,padded
+datestamp marker,stamped <date>
+space marker,a<insertspace>b

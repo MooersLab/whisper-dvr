@@ -1,3 +1,11 @@
 .DS_Store
 4551whisperdvr
-whisper-dvr.elc
+*.elc
+# Personal rule files for the text replacements.  The export holds
+# names and e-mail addresses, so only the generic files are tracked.
+skills/voice-in-replacements/data/*
+!skills/voice-in-replacements/data/README.md
+!skills/voice-in-replacements/data/contractions.csv
+__pycache__/
+.pytest_cache/
+voice-in-replacements.zip

@@ -1,0 +1,3 @@
+# Deny list used by the shared tests.
+cobra  # COBRE ; common word
+#R emacs  # review entry only, stays active

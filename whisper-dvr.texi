@@ -7,7 +7,7 @@
 @c %**end of header
 
 @copying
-This manual is for whisper-dvr (version 0.7.0).
+This manual is for whisper-dvr (version 0.8.0).
 
 Copyright @copyright{} 2024-2026 Blaine Mooers.
 
@@ -53,6 +53,7 @@ whisper.el.
 * Usage::               How to use whisper-dvr
 * LLM Post-Processing:: Structuring transcripts with an LLM
 * Automatic Deletion::  Removing processed recordings from the DVR
+* Text Replacements::   Fixing misheard words and contractions
 * Customization::       Available customization options
 * Troubleshooting::     Common issues and solutions
 * Contributing::        How to contribute
@@ -80,6 +81,9 @@ Supports multiple audio formats (MP3, WAV, M4A)
 Integrates seamlessly with whisper.el for transcription
 @item
 Inserts transcription directly at point
+@item
+Corrects misheard words and expands contractions with a Voice-In Plus
+replacement table before the LLM runs
 @end itemize
 
 @section Requirements
@@ -552,6 +556,189 @@ removable volume may stay on that volume in a hidden trash folder, so
 @item whisper-dvr-auto-delete-hook
 @vindex whisper-dvr-auto-delete-hook
 Functions called with the path of each removed recording.
+@end table
+
+@node Text Replacements
+@chapter Text Replacements
+@cindex text replacements
+@cindex Voice-In Plus
+@cindex contractions
+
+Speech recognition makes the same mistakes again and again.  It writes
+``settle cassin'' for zettelkasten and leaves every contraction in
+place.  When @code{whisper-dvr-replacements-file} names the CSV file
+that the Voice-In Plus Chrome extension exports, whisper-dvr fixes
+these errors in each transcript before it is inserted and before the
+LLM sees it.  The first column of the file holds the trigger and the
+second the replacement.
+
+Think of the step as a proofreader with a phrase book.  The proofreader
+reads one word at a time, tries the longest phrase in the book first,
+and never rereads a correction, so one replacement cannot set off
+another.  Whitespace and the punctuation around words are kept.
+
+@section Tiers
+@cindex tiers, replacement
+
+A Voice-In table mixes corrections with dictation commands.  A command
+fires only when it is said on purpose, but a recording holds whatever
+was said.  So each rule is sorted into a tier, and only the tiers in
+@code{whisper-dvr-replacements-tiers} are applied.
+
+@table @code
+@item contraction
+A contraction such as @samp{can't}.  Applied by default.
+@item correction
+A misheard word or a proper noun.  Applied by default.
+@item expansion
+A spoken abbreviation whose trigger starts with a cue word such as
+@samp{expand}.  Applied only when listed.
+@item command
+A rule that inserts markup, a template, or text with formatting codes.
+Never applied.
+@item action
+A rule that opens a web page or presses a key.  Never applied.
+@item template
+A rule whose replacement spans several lines.  Never applied.
+@end table
+
+A deny list in @code{whisper-dvr-replacements-deny-file} removes
+corrections whose trigger is an ordinary word, such as @samp{may}.  The
+script @file{audit_rules.py} in the Claude skill proposes this list from
+English word frequencies, and @kbd{make skill-data} runs it.
+
+@section Contractions
+@cindex contractions, context
+
+When @code{whisper-dvr-replacements-context} is non-nil, a contraction
+that ends in @samp{'s} or @samp{'d} is read from the next word, using
+the rules of expand-contractions.el.  ``I'd like'' becomes ``I would
+like'', ``I'd never seen'' becomes ``I had never seen'', and ``he's
+been'' becomes ``he has been''.  When LLM post-processing follows, the
+default value @code{when-llm} of
+@code{whisper-dvr-replacements-skip-ambiguous} leaves these forms for
+the LLM instead.
+
+The @file{contractions.csv} table from expand-contractions.el can be
+listed in @code{whisper-dvr-replacements-extra-files}.  A later file
+overrides an earlier one, and its header line is skipped.
+
+@lisp
+(let ((data "~/6112MooersLabGitHubLabRepos/whisper-dvr/skills/voice-in-replacements/data/"))
+  (setq whisper-dvr-replacements-file (concat data "replacements.csv")
+        whisper-dvr-replacements-extra-files
+        (list (concat data "contractions.csv")
+              (concat data "whisper-extra.csv"))
+        whisper-dvr-replacements-deny-file (concat data "deny.txt")))
+@end lisp
+
+@section Replacement commands
+
+These commands work on any text, not only on DVR transcripts.  Each
+change is one undo step.
+
+@table @code
+@item whisper-dvr-replacements-apply-region
+@findex whisper-dvr-replacements-apply-region
+Apply the replacements to the selected text.
+
+@item whisper-dvr-replacements-apply-buffer
+@findex whisper-dvr-replacements-apply-buffer
+Apply the replacements to the whole buffer, or to the accessible part
+of a narrowed buffer.
+
+@item whisper-dvr-replacements-apply-file
+@findex whisper-dvr-replacements-apply-file
+Read a file such as @file{notes.txt} and write @file{notes-replaced.txt}
+beside it.  The original is left alone.
+
+@item whisper-dvr-replacements-reload
+@findex whisper-dvr-replacements-reload
+Reread the rule files.  The files are also reread whenever they change.
+
+@item whisper-dvr-replacements-audit
+@findex whisper-dvr-replacements-audit
+Show the tier counts, the number of active rules, and the problems
+found in the rule files.
+
+@item whisper-dvr-replacements-show-log
+@findex whisper-dvr-replacements-show-log
+Show the raw text and the replacements of each pass.
+@end table
+
+@code{whisper-dvr-llm-process-region} and
+@code{whisper-dvr-llm-process-file} apply the replacements before they
+call the LLM unless @code{whisper-dvr-replacements-before-llm-commands}
+is @code{nil}.
+
+@section The Claude skill
+@cindex Claude skill
+
+The folder @file{skills/voice-in-replacements} holds a Claude skill with
+a Python copy of the same engine, for text that never passes through
+Emacs.  @kbd{make skill-zip} packages it.  Both engines pass the cases
+in @file{tests/replacement-cases.tsv} of the skill.
+
+@section Replacement settings
+@cindex customization, text replacements
+
+@table @code
+@item whisper-dvr-replacements-enabled
+@vindex whisper-dvr-replacements-enabled
+Non-nil applies the rules to new transcripts.  Default @code{t}.
+
+@item whisper-dvr-replacements-file
+@vindex whisper-dvr-replacements-file
+The Voice-In Plus CSV export.  Nothing happens while it is @code{nil}.
+
+@item whisper-dvr-replacements-extra-files
+@vindex whisper-dvr-replacements-extra-files
+Later rule files, each overriding the files before it.
+
+@item whisper-dvr-replacements-deny-file
+@vindex whisper-dvr-replacements-deny-file
+Triggers that must never fire, one per line.
+
+@item whisper-dvr-replacements-tiers
+@vindex whisper-dvr-replacements-tiers
+The tiers that are applied.  Default @code{(contraction correction)}.
+
+@item whisper-dvr-replacements-context
+@vindex whisper-dvr-replacements-context
+Non-nil reads @samp{'s} and @samp{'d} contractions from the next word.
+
+@item whisper-dvr-replacements-has-triggers
+@itemx whisper-dvr-replacements-had-triggers
+@itemx whisper-dvr-replacements-ed-base-verbs
+@itemx whisper-dvr-replacements-skippable-words
+@vindex whisper-dvr-replacements-has-triggers
+@vindex whisper-dvr-replacements-had-triggers
+@vindex whisper-dvr-replacements-ed-base-verbs
+@vindex whisper-dvr-replacements-skippable-words
+The word lists of the context rules.
+
+@item whisper-dvr-replacements-skip-ambiguous
+@vindex whisper-dvr-replacements-skip-ambiguous
+@code{when-llm} leaves ambiguous contractions for the LLM when it runs,
+@code{t} always leaves them, and @code{nil} never does.
+
+@item whisper-dvr-replacements-before-llm-commands
+@vindex whisper-dvr-replacements-before-llm-commands
+Non-nil applies the rules in the LLM region and file commands.
+
+@item whisper-dvr-replacements-log
+@itemx whisper-dvr-replacements-log-file
+@vindex whisper-dvr-replacements-log
+@vindex whisper-dvr-replacements-log-file
+Where each pass is recorded with its raw text.
+
+@item whisper-dvr-replacements-date-format
+@vindex whisper-dvr-replacements-date-format
+Format of the date that the @samp{<date>} code inserts.
+
+@item whisper-dvr-replacements-llm-note
+@vindex whisper-dvr-replacements-llm-note
+A note added to the LLM instructions while replacements are active.
 @end table
 
 @node Customization

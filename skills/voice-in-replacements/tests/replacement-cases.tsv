@@ -1,0 +1,42 @@
+# name	options	input	expected
+# Shared by tests/test_apply.py and whisper-dvr-replacements-test.el.
+# Fields are tab separated.  \n in a field means a newline, \t a tab.
+# Options: skip-ambiguous, no-context, tiers=a+b+c, nodeny.  The date is 2026-11-01.
+contraction	-	I can't go.	I cannot go.
+sentence-start-case	-	Don't stop.	Do not stop.
+curly-apostrophe	-	It’s fine.	It is fine.
+leading-apostrophe	-	'cause I said so	because I said so
+longest-match	-	my settle cassin notes	my zettelkasten notes
+no-partial-word	-	unsettled cassini	unsettled cassini
+punctuation-kept	-	(settle cassin), then emax.	(zettelkasten), then Emacs.
+interior-comma-blocks	-	settle, cassin	SETTLE-SHOULD-NOT-WIN, CASSIN-SHOULD-NOT-WIN
+case-insensitive	-	EMAX and Emax	Emacs and Emacs
+latex-value	-	an ab initio solution in p21	an \emph{ab initio} solution in $P2_{1}$
+trigger-with-dots	-	w.r.t. the axis	with respect to the axis
+trigger-with-comma	-	two dags, three	two DAGs, three
+longer-phrase-wins	-	alpha fold two and alpha fold	AlphaFold2 and AlphaFold
+no-cascade	-	a cyclic graph	a one-way cycle graph
+whitespace-kept	-	  can't\n\nemax\tdon't  	  cannot\n\nEmacs\tdo not  
+deny-list	-	the cobra program	the cobra program
+deny-ignored	nodeny	the cobra program	the COBRE program
+review-line-not-denied	-	emacs	Emacs
+expansion-off	-	expand saxs now	expand saxs now
+expansion-on	tiers=contraction+correction+expansion	expand saxs now	small-angle X-ray scattering now
+action-never	tiers=contraction+correction+expansion	open pdb	open pdb
+template-never	-	insert python code	insert python code
+command-never	-	new sentence	new sentence
+alternation	-	red and crimson	ROJO and ROJO
+padded-trigger	-	a padded trigger here	a padded here
+date-code	-	datestamp marker	stamped 2026-11-01
+insertspace-code	-	space marker	a b
+ambiguous-expanded	-	I'd go, it's late.	I would go, it is late.
+had-from-participle	-	I'd gone home	I had gone home
+had-from-ed-verb	-	you'd finished	you had finished
+would-from-ed-base	-	I'd need it	I would need it
+had-skips-adverb	-	I'd never seen it	I had never seen it
+would-at-clause-end	-	I'd, if asked	I would, if asked
+has-from-been	-	He's been here and it's got legs	He has been here and it has got legs
+is-by-default	-	he's tall	he is tall
+context-off	no-context	I'd gone	I had gone
+ambiguous-skipped	skip-ambiguous	I'd go, it's late. Let's see.	I'd go, it's late. Let us see.
+empty	-		
