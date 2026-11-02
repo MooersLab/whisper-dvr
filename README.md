@@ -14,7 +14,7 @@ You can do live transcription with the whisperer package.EL by running the whisp
 You can select the directly dictated transcript, make a region from it, and then run the library command M-x whisper-dvr-llm-process-region to apply the transcript parser skill.
 
 As of version 0.8, the transcript first passes through your Voice-In Plus text replacements, which expand contractions and fix words that Whisper mishears.
-The same replacements can be applied to any region, buffer, or file, and a companion Claude skill applies them outside Emacs.
+You can apply the same replacements to any region, buffer, or file, and a companion Claude skill applies them outside Emacs.
 
 I have everything set up to work with LaTeX, which is more capable than Markdown.
 Nonetheless, you can translate the LaTeX into Markdown using Pandoc or an LLM.
@@ -398,7 +398,7 @@ Version 0.6.0 adds an optional second stage that sends the raw transcript to a l
 The model applies the `transcript-parser` skill and returns a structured LaTeX fragment with `\subsubsection` headings, `\index` keys below each heading, one sentence per line, expanded contractions, corrected grammar, and a closing checklist of TODO items.
 
 Think of the two stages as a court reporter and an editor.
-whisper.el is the reporter who takes down every word.
+whisper.el is the reporter that records every word.
 The LLM is the editor who turns the stenographic record into a clean document.
 The editor works in the background, so Emacs stays responsive while the model thinks.
 
@@ -428,7 +428,7 @@ Claude Code is a harness, so it loads the `transcript-parser` skill from `~/.cla
    ```
 
 3. Open the `.tex` or `.org` file that should receive the notes and run `M-x whisper-dvr`.
-4. The raw transcript appears first, and the echo area reads "Please wait, the LLM is parsing the transcript. This step can take several minutes." A minute or two later the raw text is replaced by the parsed LaTeX.
+4. The raw transcript appears first, and the echo area reads "Please wait, the LLM is parsing the transcript. This step can take several minutes." A minute or two later, the raw text is replaced by the parsed LaTeX.
 
 A prefix argument inverts the setting for one run.
 `C-u M-x whisper-dvr` skips the LLM when post-processing is on, and uses it when post-processing is off.
@@ -444,7 +444,7 @@ A prefix argument inverts the setting for one run.
 | Emacs Lisp | `function` | A function such as a gptel or ellama wrapper | Up to the function |
 
 Every backend except `claude-code` reads the skill text from `whisper-dvr-llm-skill-file` and strips its YAML front matter.
-When that file is missing, a condensed copy of the skill in `whisper-dvr-llm-default-instructions` is used instead.
+If that file is missing, it uses a condensed copy of the skill in `whisper-dvr-llm-default-instructions` instead.
 
 **Local model with Ollama**
 
@@ -532,9 +532,9 @@ Version 0.7.0 can fold the middle step into the first.
 When `whisper-dvr-auto-delete-audio` is non-nil, whisper-dvr removes the audio file from the DVR as soon as its processing has succeeded, so the next step is `M-x whisper-dvr-eject`.
 
 Think of the recording as a library book on loan.
-It goes back to the shelf only after you have finished every chapter you asked for.
+It goes back to the shelf only after you finish every chapter you asked for.
 When the LLM runs, the last chapter is the parsed transcript.
-When it does not, the last chapter is the raw transcript.
+If it doesn't, the last chapter is the raw transcript.
 
 ### Turning it on
 
@@ -545,14 +545,14 @@ When it does not, the last chapter is the raw transcript.
 ```
 
 `M-x whisper-dvr-toggle-auto-delete` turns the feature on or off for the current session.
-With a prefix argument it lets you pick the timing from a list.
+With a prefix argument, you can pick the timing from a list.
 
 ### When the recording is removed
 
 | `whisper-dvr-auto-delete-audio` | LLM post-processing off | LLM post-processing on |
 |---------------------------------|-------------------------|------------------------|
 | `nil` (default) | Kept | Kept |
-| `after-processing` | Removed after the raw transcript is inserted | Removed after the parsed LaTeX is delivered. Kept if the LLM fails, times out, or is cancelled |
+| `after-processing` | Removed after the raw transcript is inserted | Removed after the parsed LaTeX is delivered. Kept if the LLM fails, times out, or is canceled |
 | `after-transcription` | Removed after the raw transcript is inserted | Removed after the raw transcript is inserted, even if the LLM later fails |
 
 ### Safety rules
@@ -570,7 +570,7 @@ The value `default` follows `whisper-dvr-use-trash`, `trash` always uses the tra
 Depending on how Emacs moves files to the trash on your system, a recording trashed from a removable volume may stay on that volume in a hidden trash folder and keep using space on the recorder.
 Choose `delete` when you want the space back at once.
 
-`whisper-dvr-auto-delete-hook` runs after each removal with the path of the removed file, which is a convenient place to log what was deleted.
+`whisper-dvr-auto-delete-hook` runs after each removal and provides the path to the removed file, making it a convenient place to log what was deleted.
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
@@ -582,7 +582,7 @@ Choose `delete` when you want the space back at once.
 
 Speech recognition makes the same mistakes again and again.
 It writes "settle cassin" for zettelkasten and "abernishio" for *ab initio*, and it leaves every contraction in place.
-Version 0.8.0 fixes these errors before the LLM sees the transcript, so less editing is left at the end.
+Version 0.8.0 fixes these errors before the LLM sees the transcript, so it leaves less editing for the end.
 The rules come from the CSV file that the Voice-In Plus Chrome extension exports, with the trigger in the first column and the replacement in the second.
 
 Think of the step as a proofreader with a phrase book.
@@ -635,7 +635,7 @@ It holds 248 entries and corrects several Voice-In rules, such as `won't` and `d
    ```
 
 5. Run `M-x whisper-dvr` as usual.
-   The transcript is corrected before it is inserted, and the LLM receives the corrected text.
+   The transcript is corrected before insertion, and the LLM receives the corrected text.
 
 The raw text of every pass is kept in the buffer `*whisper-dvr-replacements*`, which `M-x whisper-dvr-replacements-show-log` displays.
 Set `whisper-dvr-replacements-log-file` to keep the same record in a file.
@@ -656,7 +656,7 @@ Each command is one undo step.
 `skills/voice-in-replacements` holds a Claude skill with a Python copy of the same engine.
 It cleans text that never passes through Emacs, such as a MacWhisper export or a pasted draft.
 `make skill-zip` packages it for upload.
-Both engines pass the cases in `skills/voice-in-replacements/tests/replacement-cases.tsv`, and they give byte-identical output on the full rule set.
+Both engines pass the cases in `skills/voice-in-replacements/tests/replacement-cases.tsv` and produce byte-identical output for the full rule set.
 
 ### Text replacement settings
 
@@ -706,7 +706,7 @@ Main command for transcription. Lists all audio files in the configured DVR dire
 
 **Safety checks:**
 - Rejects read-only buffers
-- Warns if buffer is not visiting a file
+- Warns if the buffer is not visiting a file
 
 ### whisper-dvr-set-directory
 
@@ -733,7 +733,7 @@ C-u M-x whisper-dvr-set-directory-to-sd-card
 
 A prefix argument writes the value with `customize-save-variable`, so
 the SD card remains the default in later sessions. Without the prefix
-argument the change lasts only for the current session, which matches
+argument, the change lasts only for the current session, which matches
 the behavior of `whisper-dvr-set-directory`.
 
 The directory is set even when the card is not mounted, so the command
@@ -792,7 +792,7 @@ finishes.
 ## Testing
 
 The package includes a comprehensive ERT test suite in `whisper-dvr-test.el` and `whisper-dvr-replacements-test.el`.
-The Claude skill has a pytest suite in `skills/voice-in-replacements/tests`, which needs Python 3 and pytest.
+The Claude skill includes a pytest suite in `skills/voice-in-replacements/tests` and requires Python 3 and pytest.
 
 ### Tutorial: Running the Test Suite
 
