@@ -87,6 +87,43 @@
         (should (member "/test/dir/recording1.mp3" result))
         (should (member "/test/dir/recording2.wav" result))))))
 
+(ert-deftest whisper-dvr-test-list-audio-files-upper-case-extension ()
+  "Test that upper-case extensions such as .MP3 are found.
+Also check that AppleDouble files and a space in the path cause no harm."
+  (let* ((dir (make-temp-file "whisper dvr " t))
+         (whisper-dvr-directory dir)
+         (whisper-dvr-file-extensions '("mp3" "wav")))
+    (unwind-protect
+        (progn
+          (dolist (name '("20261104192614.MP3" "._20261104192614.MP3"
+                          "lower.mp3" "Mixed.Wav" "notes.txt"))
+            (write-region "" nil (expand-file-name name dir)))
+          (let ((result (mapcar #'file-name-nondirectory
+                                (whisper-dvr--list-audio-files))))
+            (should (= 3 (length result)))
+            (should (member "20261104192614.MP3" result))
+            (should (member "lower.mp3" result))
+            (should (member "Mixed.Wav" result))
+            (should-not (member "._20261104192614.MP3" result))
+            (should-not (member "notes.txt" result))))
+      (delete-directory dir t))))
+
+(ert-deftest whisper-dvr-test-audio-extension-regexp ()
+  "Test the case-insensitive extension regexp."
+  (let ((case-fold-search nil)
+        (re (whisper-dvr--audio-extension-regexp '("mp3" "m4a"))))
+    (should (string-match-p re "a.MP3"))
+    (should (string-match-p re "a.mp3"))
+    (should (string-match-p re "a.M4A"))
+    (should-not (string-match-p re "a.mp3.txt"))
+    (should-not (string-match-p re "amp3"))))
+
+(ert-deftest whisper-dvr-test-apple-double-p ()
+  "Test detection of macOS AppleDouble files."
+  (should (whisper-dvr--apple-double-p "/Volumes/USBDISK/A/._x.MP3"))
+  (should-not (whisper-dvr--apple-double-p "/Volumes/USBDISK/A/x.MP3"))
+  (should-not (whisper-dvr--apple-double-p "/a/b._x.MP3")))
+
 (ert-deftest whisper-dvr-test-list-audio-files-empty-directory ()
   "Test behavior with directory containing no audio files."
   (let ((whisper-dvr-directory "/test/empty"))

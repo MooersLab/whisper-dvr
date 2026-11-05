@@ -1,7 +1,7 @@
-This is whisper-dvr.info, produced by makeinfo version 7.1 from
+This is whisper-dvr.info, produced by makeinfo version 7.3 from
 whisper-dvr.texi.
 
-This manual is for whisper-dvr (version 0.6.0).
+This manual is for whisper-dvr (version 0.8.0).
 
    Copyright © 2024-2026 Blaine Mooers.
 
@@ -24,7 +24,7 @@ whisper-dvr
 whisper-dvr is an Emacs package that provides a convenient interface for
 transcribing audio files from a digital voice recorder using whisper.el.
 
-   This manual is for whisper-dvr (version 0.6.0).
+   This manual is for whisper-dvr (version 0.8.0).
 
    Copyright © 2024-2026 Blaine Mooers.
 
@@ -41,6 +41,8 @@ transcribing audio files from a digital voice recorder using whisper.el.
 * Configuration::       Configuring whisper-dvr
 * Usage::               How to use whisper-dvr
 * LLM Post-Processing:: Structuring transcripts with an LLM
+* Automatic Deletion::  Removing processed recordings from the DVR
+* Text Replacements::   Fixing misheard words and contractions
 * Customization::       Available customization options
 * Troubleshooting::     Common issues and solutions
 * Contributing::        How to contribute
@@ -65,6 +67,8 @@ workflow of transcribing audio files from a digital voice recorder
    • Supports multiple audio formats (MP3, WAV, M4A)
    • Integrates seamlessly with whisper.el for transcription
    • Inserts transcription directly at point
+   • Corrects misheard words and expands contractions with a Voice-In
+     Plus replacement table before the LLM runs
 
 1.2 Requirements
 ================
@@ -184,8 +188,13 @@ command can be run before the recorder is plugged in.
      entry point used by batch transcription and by the automatic device
      handlers.
 
+‘whisper-dvr-toggle-auto-delete’
+     Turn automatic deletion of processed recordings on or off for the
+     current session (*note Automatic Deletion::).  With a prefix
+     argument, pick the timing from a list.
+
 
-File: whisper-dvr.info,  Node: LLM Post-Processing,  Next: Customization,  Prev: Usage,  Up: Top
+File: whisper-dvr.info,  Node: LLM Post-Processing,  Next: Automatic Deletion,  Prev: Usage,  Up: Top
 
 5 LLM Post-Processing
 *********************
@@ -374,12 +383,235 @@ working, the result is inserted after it instead of replacing it.
      Functions called with the start and end of the inserted result.
 
 
-File: whisper-dvr.info,  Node: Customization,  Next: Troubleshooting,  Prev: LLM Post-Processing,  Up: Top
+File: whisper-dvr.info,  Node: Automatic Deletion,  Next: Text Replacements,  Prev: LLM Post-Processing,  Up: Top
 
-6 Customization
+6 Automatic Deletion
+********************
+
+Without this feature a session ends with three steps.  You transcribe
+the recording, delete it from the DVR, and eject the DVR. When
+‘whisper-dvr-auto-delete-audio’ is non-nil, whisper-dvr removes the
+audio file from the DVR as soon as its processing has succeeded, so the
+next step is ‘M-x whisper-dvr-eject’.
+
+   Think of the recording as a library book on loan.  It goes back to
+the shelf only after you have finished every chapter you asked for.
+When the LLM runs, the last chapter is the parsed transcript.  When it
+does not, the last chapter is the raw transcript.
+
+     (setq whisper-dvr-auto-delete-audio 'after-processing)
+     ;; Free the space on the recorder at once.
+     (setq whisper-dvr-auto-delete-method 'delete)
+
+6.1 When the recording is removed
+=================================
+
+‘nil’
+     The recording is kept.  This is the default.
+
+‘after-processing’
+     The recording is removed once the last requested stage succeeds.
+     With LLM post-processing, that stage is the delivery of the parsed
+     text, so a failed, timed out, or cancelled request keeps the file.
+     Without the LLM, the file is removed once the raw transcript is
+     inserted.
+
+‘after-transcription’
+     The recording is removed as soon as whisper.el inserts a non-empty
+     raw transcript, even when the LLM fails later.
+
+6.2 Safety rules
+================
+
+   • Only files inside a DVR location are removed.  These locations are
+     ‘whisper-dvr-directory’, ‘whisper-dvr-sd-card-directory’,
+     ‘whisper-dvr-internal-memory-directory’, and the entries in
+     ‘whisper-dvr-volume-mount-points’.
+   • An empty transcript keeps the file.
+   • A whisper.el run for a different file keeps the file.
+   • With ‘after-processing’, the file stays when LLM post-processing
+     was requested but could not start.
+   • Only the interactive commands ‘whisper-dvr’ and
+     ‘whisper-dvr-transcribe-file’ delete files.  Batch and automatic
+     transcription do not.
+
+6.3 Deletion settings
+=====================
+
+‘whisper-dvr-auto-delete-audio’
+     When to remove a processed recording.  One of ‘nil’,
+     ‘after-processing’, or ‘after-transcription’.  Default ‘nil’.
+
+‘whisper-dvr-auto-delete-method’
+     How the recording is removed.  The value ‘default’ follows
+     ‘whisper-dvr-use-trash’, ‘trash’ always uses the trash, and
+     ‘delete’ removes the file permanently.  A file trashed from a
+     removable volume may stay on that volume in a hidden trash folder,
+     so ‘delete’ is the choice that frees the space at once.
+
+‘whisper-dvr-auto-delete-hook’
+     Functions called with the path of each removed recording.
+
+
+File: whisper-dvr.info,  Node: Text Replacements,  Next: Customization,  Prev: Automatic Deletion,  Up: Top
+
+7 Text Replacements
+*******************
+
+Speech recognition makes the same mistakes again and again.  It writes
+"settle cassin" for zettelkasten and leaves every contraction in place.
+When ‘whisper-dvr-replacements-file’ names the CSV file that the
+Voice-In Plus Chrome extension exports, whisper-dvr fixes these errors
+in each transcript before it is inserted and before the LLM sees it.
+The first column of the file holds the trigger and the second the
+replacement.
+
+   Think of the step as a proofreader with a phrase book.  The
+proofreader reads one word at a time, tries the longest phrase in the
+book first, and never rereads a correction, so one replacement cannot
+set off another.  Whitespace and the punctuation around words are kept.
+
+7.1 Tiers
+=========
+
+A Voice-In table mixes corrections with dictation commands.  A command
+fires only when it is said on purpose, but a recording holds whatever
+was said.  So each rule is sorted into a tier, and only the tiers in
+‘whisper-dvr-replacements-tiers’ are applied.
+
+‘contraction’
+     A contraction such as ‘can't’.  Applied by default.
+‘correction’
+     A misheard word or a proper noun.  Applied by default.
+‘expansion’
+     A spoken abbreviation whose trigger starts with a cue word such as
+     ‘expand’.  Applied only when listed.
+‘command’
+     A rule that inserts markup, a template, or text with formatting
+     codes.  Never applied.
+‘action’
+     A rule that opens a web page or presses a key.  Never applied.
+‘template’
+     A rule whose replacement spans several lines.  Never applied.
+
+   A deny list in ‘whisper-dvr-replacements-deny-file’ removes
+corrections whose trigger is an ordinary word, such as ‘may’.  The
+script ‘audit_rules.py’ in the Claude skill proposes this list from
+English word frequencies, and ‘make skill-data’ runs it.
+
+7.2 Contractions
+================
+
+When ‘whisper-dvr-replacements-context’ is non-nil, a contraction that
+ends in ‘'s’ or ‘'d’ is read from the next word, using the rules of
+expand-contractions.el.  "I'd like" becomes "I would like", "I'd never
+seen" becomes "I had never seen", and "he's been" becomes "he has been".
+When LLM post-processing follows, the default value ‘when-llm’ of
+‘whisper-dvr-replacements-skip-ambiguous’ leaves these forms for the LLM
+instead.
+
+   The ‘contractions.csv’ table from expand-contractions.el can be
+listed in ‘whisper-dvr-replacements-extra-files’.  A later file
+overrides an earlier one, and its header line is skipped.
+
+     (let ((data "~/6112MooersLabGitHubLabRepos/whisper-dvr/skills/voice-in-replacements/data/"))
+       (setq whisper-dvr-replacements-file (concat data "replacements.csv")
+             whisper-dvr-replacements-extra-files
+             (list (concat data "contractions.csv")
+                   (concat data "whisper-extra.csv"))
+             whisper-dvr-replacements-deny-file (concat data "deny.txt")))
+
+7.3 Replacement commands
+========================
+
+These commands work on any text, not only on DVR transcripts.  Each
+change is one undo step.
+
+‘whisper-dvr-replacements-apply-region’
+     Apply the replacements to the selected text.
+
+‘whisper-dvr-replacements-apply-buffer’
+     Apply the replacements to the whole buffer, or to the accessible
+     part of a narrowed buffer.
+
+‘whisper-dvr-replacements-apply-file’
+     Read a file such as ‘notes.txt’ and write ‘notes-replaced.txt’
+     beside it.  The original is left alone.
+
+‘whisper-dvr-replacements-reload’
+     Reread the rule files.  The files are also reread whenever they
+     change.
+
+‘whisper-dvr-replacements-audit’
+     Show the tier counts, the number of active rules, and the problems
+     found in the rule files.
+
+‘whisper-dvr-replacements-show-log’
+     Show the raw text and the replacements of each pass.
+
+   ‘whisper-dvr-llm-process-region’ and ‘whisper-dvr-llm-process-file’
+apply the replacements before they call the LLM unless
+‘whisper-dvr-replacements-before-llm-commands’ is ‘nil’.
+
+7.4 The Claude skill
+====================
+
+The folder ‘skills/voice-in-replacements’ holds a Claude skill with a
+Python copy of the same engine, for text that never passes through
+Emacs.  ‘make skill-zip’ packages it.  Both engines pass the cases in
+‘tests/replacement-cases.tsv’ of the skill.
+
+7.5 Replacement settings
+========================
+
+‘whisper-dvr-replacements-enabled’
+     Non-nil applies the rules to new transcripts.  Default ‘t’.
+
+‘whisper-dvr-replacements-file’
+     The Voice-In Plus CSV export.  Nothing happens while it is ‘nil’.
+
+‘whisper-dvr-replacements-extra-files’
+     Later rule files, each overriding the files before it.
+
+‘whisper-dvr-replacements-deny-file’
+     Triggers that must never fire, one per line.
+
+‘whisper-dvr-replacements-tiers’
+     The tiers that are applied.  Default ‘(contraction correction)’.
+
+‘whisper-dvr-replacements-context’
+     Non-nil reads ‘'s’ and ‘'d’ contractions from the next word.
+
+‘whisper-dvr-replacements-has-triggers’
+‘whisper-dvr-replacements-had-triggers’
+‘whisper-dvr-replacements-ed-base-verbs’
+‘whisper-dvr-replacements-skippable-words’
+     The word lists of the context rules.
+
+‘whisper-dvr-replacements-skip-ambiguous’
+     ‘when-llm’ leaves ambiguous contractions for the LLM when it runs,
+     ‘t’ always leaves them, and ‘nil’ never does.
+
+‘whisper-dvr-replacements-before-llm-commands’
+     Non-nil applies the rules in the LLM region and file commands.
+
+‘whisper-dvr-replacements-log’
+‘whisper-dvr-replacements-log-file’
+     Where each pass is recorded with its raw text.
+
+‘whisper-dvr-replacements-date-format’
+     Format of the date that the ‘<date>’ code inserts.
+
+‘whisper-dvr-replacements-llm-note’
+     A note added to the LLM instructions while replacements are active.
+
+
+File: whisper-dvr.info,  Node: Customization,  Next: Troubleshooting,  Prev: Text Replacements,  Up: Top
+
+8 Customization
 ***************
 
-6.1 whisper-dvr-directory
+8.1 whisper-dvr-directory
 =========================
 
 The directory path where your DVR stores recordings.
@@ -388,7 +620,7 @@ The directory path where your DVR stores recordings.
 
      (setq whisper-dvr-directory "/your/dvr/path")
 
-6.2 whisper-dvr-sd-card-directory
+8.2 whisper-dvr-sd-card-directory
 =================================
 
 The directory path where the removable SD card stores recordings.
@@ -398,7 +630,7 @@ The directory path where the removable SD card stores recordings.
      (setq whisper-dvr-sd-card-directory
            "/Volumes/MEMORY CARD/private/SONY/REC_FILE/FOLDER01")
 
-6.3 whisper-dvr-internal-memory-directory
+8.3 whisper-dvr-internal-memory-directory
 =========================================
 
 The directory path where the recorder's built-in memory stores
@@ -409,7 +641,7 @@ recordings.
      (setq whisper-dvr-internal-memory-directory
            "/Volumes/IC RECORDER/REC_FILE/FOLDER01")
 
-6.4 whisper-dvr-file-extensions
+8.4 whisper-dvr-file-extensions
 ===============================
 
 List of audio file extensions to include when listing files.
@@ -421,10 +653,10 @@ List of audio file extensions to include when listing files.
 
 File: whisper-dvr.info,  Node: Troubleshooting,  Next: Contributing,  Prev: Customization,  Up: Top
 
-7 Troubleshooting
+9 Troubleshooting
 *****************
 
-7.1 LLM post-processing skipped or failed
+9.1 LLM post-processing skipped or failed
 =========================================
 
 A warning that LLM post-processing was skipped means Emacs could not
@@ -434,7 +666,7 @@ the raw transcript stays in the buffer and the message names the cause,
 such as an HTTP 401 for a bad key or a timeout for a long recording on a
 slow local model.
 
-7.2 DVR directory does not exist
+9.2 DVR directory does not exist
 ================================
 
 Ensure your DVR is connected and mounted.  Check the mount path with:
@@ -442,7 +674,7 @@ Ensure your DVR is connected and mounted.  Check the mount path with:
      ls /Volumes/  # macOS
      ls /media/    # Linux
 
-7.3 No audio files found
+9.3 No audio files found
 ========================
 
 Verify that:
@@ -450,7 +682,7 @@ Verify that:
    • The directory contains files with supported extensions
    • File permissions allow reading
 
-7.4 Transcription starts recording instead of transcribing
+9.4 Transcription starts recording instead of transcribing
 ==========================================================
 
 This was a bug in versions prior to 0.2.0.  The issue occurred because
@@ -463,8 +695,8 @@ with the file path directly.
 
 File: whisper-dvr.info,  Node: Contributing,  Next: License,  Prev: Troubleshooting,  Up: Top
 
-8 Contributing
-**************
+10 Contributing
+***************
 
 Contributions are welcome!
 
@@ -477,8 +709,8 @@ Contributions are welcome!
 
 File: whisper-dvr.info,  Node: License,  Next: Index,  Prev: Contributing,  Up: Top
 
-9 License
-*********
+11 License
+**********
 
 whisper-dvr is free software: you can redistribute it and/or modify it
 under the terms of the GNU General Public License as published by the
@@ -497,15 +729,22 @@ Concept Index
  [index ]
 * Menu:
 
+* automatic deletion:                    Automatic Deletion.  (line   6)
 * backends, LLM:                         LLM Post-Processing. (line  39)
+* Claude skill:                          Text Replacements.   (line 104)
 * commands:                              Usage.               (line  48)
 * configuration:                         Configuration.       (line   6)
+* contractions:                          Text Replacements.   (line   6)
+* contractions, context:                 Text Replacements.   (line  50)
 * contributing:                          Contributing.        (line   6)
+* customization, automatic deletion:     Automatic Deletion.  (line  56)
 * customization, directory:              Customization.       (line   9)
 * customization, file extensions:        Customization.       (line  39)
 * customization, internal memory:        Customization.       (line  28)
 * customization, LLM:                    LLM Post-Processing. (line 108)
 * customization, SD card:                Customization.       (line  18)
+* customization, text replacements:      Text Replacements.   (line 112)
+* deleting recordings:                   Automatic Deletion.  (line   6)
 * directory, changing:                   Usage.               (line  22)
 * error, directory not found:            Troubleshooting.     (line  19)
 * error, LLM:                            Troubleshooting.     (line   9)
@@ -517,9 +756,12 @@ Concept Index
 * local models:                          LLM Post-Processing. (line  39)
 * memory card:                           Usage.               (line  29)
 * SD card:                               Usage.               (line  29)
+* text replacements:                     Text Replacements.   (line   6)
+* tiers, replacement:                    Text Replacements.   (line  22)
 * transcript-parser skill:               LLM Post-Processing. (line   6)
-* troubleshooting:                       Troubleshooting.     (line   5)
+* troubleshooting:                       Troubleshooting.     (line   6)
 * usage, basic:                          Usage.               (line   9)
+* Voice-In Plus:                         Text Replacements.   (line   6)
 * whisper-file, API change:              Troubleshooting.     (line  35)
 
 Function Index
@@ -535,12 +777,19 @@ Function Index
 * whisper-dvr-llm-select-backend:        LLM Post-Processing. (line  82)
 * whisper-dvr-llm-show-log:              LLM Post-Processing. (line 101)
 * whisper-dvr-llm-test-backend:          LLM Post-Processing. (line  97)
+* whisper-dvr-replacements-apply-buffer: Text Replacements.   (line  79)
+* whisper-dvr-replacements-apply-file:   Text Replacements.   (line  83)
+* whisper-dvr-replacements-apply-region: Text Replacements.   (line  76)
+* whisper-dvr-replacements-audit:        Text Replacements.   (line  91)
+* whisper-dvr-replacements-reload:       Text Replacements.   (line  87)
+* whisper-dvr-replacements-show-log:     Text Replacements.   (line  95)
 * whisper-dvr-set-directory:             Usage.               (line  22)
 * whisper-dvr-set-directory <1>:         Usage.               (line  56)
 * whisper-dvr-set-directory-to-internal-memory: Usage.        (line  29)
 * whisper-dvr-set-directory-to-internal-memory <1>: Usage.    (line  63)
 * whisper-dvr-set-directory-to-sd-card:  Usage.               (line  29)
 * whisper-dvr-set-directory-to-sd-card <1>: Usage.            (line  59)
+* whisper-dvr-toggle-auto-delete:        Usage.               (line  72)
 * whisper-dvr-toggle-llm-postprocess:    LLM Post-Processing. (line  79)
 * whisper-dvr-transcribe-file:           Usage.               (line  67)
 
@@ -550,6 +799,9 @@ Variable Index
  [index ]
 * Menu:
 
+* whisper-dvr-auto-delete-audio:         Automatic Deletion.  (line  57)
+* whisper-dvr-auto-delete-hook:          Automatic Deletion.  (line  68)
+* whisper-dvr-auto-delete-method:        Automatic Deletion.  (line  61)
 * whisper-dvr-directory:                 Customization.       (line   9)
 * whisper-dvr-file-extensions:           Customization.       (line  39)
 * whisper-dvr-internal-memory-directory: Customization.       (line  28)
@@ -577,26 +829,46 @@ Variable Index
 * whisper-dvr-llm-temperature:           LLM Post-Processing. (line 176)
 * whisper-dvr-llm-timeout:               LLM Post-Processing. (line 170)
 * whisper-dvr-llm-wait-message:          LLM Post-Processing. (line 182)
+* whisper-dvr-replacements-before-llm-commands: Text Replacements.
+                                                              (line 141)
+* whisper-dvr-replacements-context:      Text Replacements.   (line 128)
+* whisper-dvr-replacements-date-format:  Text Replacements.   (line 148)
+* whisper-dvr-replacements-deny-file:    Text Replacements.   (line 122)
+* whisper-dvr-replacements-ed-base-verbs: Text Replacements.  (line 134)
+* whisper-dvr-replacements-enabled:      Text Replacements.   (line 113)
+* whisper-dvr-replacements-extra-files:  Text Replacements.   (line 119)
+* whisper-dvr-replacements-file:         Text Replacements.   (line 116)
+* whisper-dvr-replacements-had-triggers: Text Replacements.   (line 134)
+* whisper-dvr-replacements-has-triggers: Text Replacements.   (line 134)
+* whisper-dvr-replacements-llm-note:     Text Replacements.   (line 151)
+* whisper-dvr-replacements-log:          Text Replacements.   (line 145)
+* whisper-dvr-replacements-log-file:     Text Replacements.   (line 145)
+* whisper-dvr-replacements-skip-ambiguous: Text Replacements. (line 137)
+* whisper-dvr-replacements-skippable-words: Text Replacements.
+                                                              (line 134)
+* whisper-dvr-replacements-tiers:        Text Replacements.   (line 125)
 * whisper-dvr-sd-card-directory:         Customization.       (line  18)
-
 
 
 Tag Table:
 Node: Top620
-Node: Introduction1756
-Node: Installation2521
-Node: Configuration3168
-Node: Usage3513
-Node: LLM Post-Processing5948
-Node: Customization12650
-Node: Troubleshooting13888
-Node: Contributing15294
-Node: License15597
-Node: Index15945
+Node: Introduction1886
+Node: Installation2771
+Node: Configuration3418
+Node: Usage3763
+Node: LLM Post-Processing6417
+Node: Automatic Deletion13124
+Node: Text Replacements16010
+Node: Customization22063
+Node: Troubleshooting23299
+Node: Contributing24705
+Node: License25010
+Node: Index25360
 
 End Tag Table
 
 
 Local Variables:
 coding: utf-8
+Info-documentlanguage: en
 End:

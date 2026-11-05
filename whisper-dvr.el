@@ -435,16 +435,44 @@ the inserted text, and runs with the receiving buffer current."
   :type 'hook
   :group 'whisper-dvr-llm)
 
+(defun whisper-dvr--case-insensitive-regexp (string)
+  "Return a regexp that matches STRING with letters in either case.
+Each letter becomes a bracket expression such as [mM], and every other
+character is quoted.  This is needed because `directory-files' matches
+its pattern case-sensitively on macOS and GNU/Linux, while voice
+recorders often write upper-case extensions such as .MP3."
+  (mapconcat (lambda (ch)
+               (let ((lo (downcase ch))
+                     (up (upcase ch)))
+                 (if (= lo up)
+                     (regexp-quote (char-to-string ch))
+                   (format "[%c%c]" lo up))))
+             string ""))
+
+(defun whisper-dvr--audio-extension-regexp (extensions)
+  "Return a regexp matching file names that end in one of EXTENSIONS.
+The match ignores the case of the extension."
+  (concat "\\.\\(?:"
+          (mapconcat #'whisper-dvr--case-insensitive-regexp extensions "\\|")
+          "\\)\\'"))
+
+(defun whisper-dvr--apple-double-p (file)
+  "Return non-nil if FILE is a macOS AppleDouble metadata file.
+macOS writes a file named ._NAME beside each file it touches on a FAT
+or exFAT volume.  These files hold no audio and must be skipped."
+  (string-prefix-p "._" (file-name-nondirectory file)))
+
 (defun whisper-dvr--list-audio-files ()
   "Return a list of audio files in `whisper-dvr-directory'.
-Files are filtered by extensions in `whisper-dvr-file-extensions'."
+Files are filtered by extensions in `whisper-dvr-file-extensions',
+ignoring case, and macOS AppleDouble files (._NAME) are skipped."
   (let ((dir (expand-file-name whisper-dvr-directory)))
     (unless (file-directory-p dir)
       (user-error "DVR directory does not exist: %s" dir))
-    (let ((pattern (concat "\\."
-                           (regexp-opt whisper-dvr-file-extensions)
-                           "\\'")))
-      (directory-files dir t pattern))))
+    (let ((pattern (whisper-dvr--audio-extension-regexp
+                    whisper-dvr-file-extensions)))
+      (cl-remove-if #'whisper-dvr--apple-double-p
+                    (directory-files dir t pattern)))))
 
 (defun whisper-dvr--format-file-entry (filepath)
   "Format FILEPATH for display in the completion list.
@@ -796,12 +824,13 @@ Prompts for confirmation before deletion unless NO-CONFIRM is non-nil."
     (error "Variable whisper-dvr-directory is not defined"))
   (let* ((dvr-dir whisper-dvr-directory)
          (audio-extensions '("wav" "mp3" "m4a" "flac" "ogg"))
-         (audio-files (directory-files
-                       dvr-dir
-                       nil
-                       (concat "\\."
-                               (regexp-opt audio-extensions)
-                               "$")))
+         (audio-files (cl-remove-if
+                       #'whisper-dvr--apple-double-p
+                       (directory-files
+                        dvr-dir
+                        nil
+                        (whisper-dvr--audio-extension-regexp
+                         audio-extensions))))
          (selected-files (completing-read-multiple
                           "Select files to delete (comma-separated): "
                           audio-files
@@ -1617,9 +1646,12 @@ Returns non-nil if file is in history and unchanged."
   "Get list of files from DEVICE that should be transcribed.
 Filters based on `whisper-dvr-auto-transcribe-filter'."
   (let* ((directory (plist-get device :directory))
-         (all-files (directory-files-recursively
-                    directory
-                    whisper-dvr-recording-regexp)))
+         (all-files (cl-remove-if
+                     #'whisper-dvr--apple-double-p
+                     (let ((case-fold-search t))
+                       (directory-files-recursively
+                        directory
+                        whisper-dvr-recording-regexp)))))
     (cl-case whisper-dvr-auto-transcribe-filter
       (new-only
        (cl-remove-if #'whisper-dvr--is-transcribed-p all-files))
