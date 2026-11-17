@@ -777,6 +777,7 @@ Also check that AppleDouble files and a space in the path cause no harm."
          (whisper-dvr-llm-claude-args '("--output-format" "text"))
          (whisper-dvr-llm-claude-embed-skill nil)
          (whisper-dvr-llm-claude-unset-env '("ANTHROPIC_API_KEY"))
+         (whisper-dvr-llm-claude-set-env '("CLAUDE_CODE_DISABLE_AUTO_MEMORY=1"))
          (whisper-dvr-llm-insert-method 'replace)
          (whisper-dvr-llm-timeout 30)
          (whisper-dvr-llm-temperature nil)
@@ -1123,6 +1124,54 @@ Also check that AppleDouble files and a space in the path cause no harm."
                 (whisper-dvr-llm-process-text "raw" (lambda (r) (setq result r)))
                 (whisper-dvr-test--wait-for-jobs)
                 (should (equal result "key=sk-should-not-leak"))))))
+      (delete-file script))))
+
+(ert-deftest whisper-dvr-test-llm-claude-code-default-args-isolate-job ()
+  "Test that the default arguments keep earlier transcripts out of a job."
+  (let ((args (default-value 'whisper-dvr-llm-claude-args)))
+    (should (equal (cadr (member "--tools" args)) "Skill"))
+    (should (equal (cadr (member "--allowedTools" args)) "Skill"))
+    (should (equal (cadr (member "--output-format" args)) "text"))
+    (should (member "--no-session-persistence" args)))
+  (should (equal (default-value 'whisper-dvr-llm-claude-set-env)
+                 '("CLAUDE_CODE_DISABLE_AUTO_MEMORY=1"))))
+
+(ert-deftest whisper-dvr-test-llm-claude-code-spec-carries-set-env ()
+  "Test that only the harness spec carries the environment settings."
+  (whisper-dvr-test--with-llm-defaults
+    (should (equal (plist-get (whisper-dvr--llm-request-spec "x") :set-env)
+                   '("CLAUDE_CODE_DISABLE_AUTO_MEMORY=1")))
+    (let ((whisper-dvr-llm-backend 'command)
+          (whisper-dvr-llm-command '("sh" "-c" "cat")))
+      (should-not (plist-get (whisper-dvr--llm-request-spec "x") :set-env)))))
+
+(ert-deftest whisper-dvr-test-llm-claude-code-disables-auto-memory ()
+  "Test that the harness runs with Claude Code auto memory turned off."
+  (skip-unless (executable-find "sh"))
+  (let ((script (make-temp-file "fake-claude" nil ".sh"
+                                (concat "#!/bin/sh\n"
+                                        "cat >/dev/null\n"
+                                        "echo \"memory=${CLAUDE_CODE_DISABLE_AUTO_MEMORY:-unset}\"\n"))))
+    (unwind-protect
+        (progn
+          (set-file-modes script #o755)
+          (whisper-dvr-test--with-llm-defaults
+            (let ((whisper-dvr-llm-claude-program script)
+                  ;; A bare name removes any value inherited from the
+                  ;; session that runs the tests.
+                  (process-environment (cons "CLAUDE_CODE_DISABLE_AUTO_MEMORY"
+                                             process-environment))
+                  (result nil))
+              (whisper-dvr-llm-process-text "raw" (lambda (r) (setq result r)))
+              (whisper-dvr-test--wait-for-jobs)
+              (should (equal result "memory=1"))
+              ;; The environment of Emacs itself is left alone.
+              (should-not (getenv "CLAUDE_CODE_DISABLE_AUTO_MEMORY"))
+              ;; With the option cleared, auto memory stays available.
+              (let ((whisper-dvr-llm-claude-set-env nil))
+                (whisper-dvr-llm-process-text "raw" (lambda (r) (setq result r)))
+                (whisper-dvr-test--wait-for-jobs)
+                (should (equal result "memory=unset"))))))
       (delete-file script))))
 
 (ert-deftest whisper-dvr-test-llm-claude-code-fake-harness ()

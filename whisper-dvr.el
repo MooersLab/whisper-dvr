@@ -5,7 +5,7 @@
 ;; URL: https://github.com/MooersLab/whisper-dvr
 ;; Keywords: multimedia, convenience
 ;; Package-Requires: ((emacs "27.1") (whisper "0.1"))
-;; Version: 0.8.0
+;; Version: 0.8.1
 
 ;;; Commentary:
 ;; This package provides functions to list, transcribe, and manage MP3 files
@@ -34,6 +34,12 @@
 ;; `whisper-dvr-replacements-apply-buffer', and
 ;; `whisper-dvr-replacements-apply-file' apply the same rules to any
 ;; text.  See whisper-dvr-replacements.el.
+;;
+;; Version 0.8.1 isolates each Claude Code job.  The `claude-code'
+;; backend now runs with auto memory turned off, with Skill as its only
+;; tool, and without saving the session, so text from earlier
+;; recordings cannot leak into the parsed transcript.  See
+;; `whisper-dvr-llm-claude-args' and `whisper-dvr-llm-claude-set-env'.
 
 ;;; Code:
 
@@ -334,9 +340,36 @@ A \"%s\" in the string is replaced by `whisper-dvr-llm-skill-name'."
   :group 'whisper-dvr-llm)
 
 (defcustom whisper-dvr-llm-claude-args
-  '("--output-format" "text" "--allowedTools" "Skill")
+  '("--output-format" "text"
+    "--tools" "Skill"
+    "--allowedTools" "Skill"
+    "--no-session-persistence")
   "Extra command line arguments for the `claude-code' backend.
-These follow the prompt and the optional --model argument."
+These follow the prompt and the optional --model argument.
+
+The default isolates each job so that text from earlier recordings
+cannot reach the parsed transcript.  The pair --tools Skill makes
+Skill the only tool, so Claude Code cannot read older transcripts in
+the working directory.  The pair --allowedTools Skill lets the skill
+run without a permission prompt.  The flag --no-session-persistence
+keeps the print-mode session from being saved to disk.  When the skill
+does not load on your version of Claude Code, remove the --tools pair.
+See also `whisper-dvr-llm-claude-set-env'."
+  :type '(repeat string)
+  :group 'whisper-dvr-llm)
+
+(defcustom whisper-dvr-llm-claude-set-env
+  '("CLAUDE_CODE_DISABLE_AUTO_MEMORY=1")
+  "Environment variables set before the `claude-code' backend runs.
+Each element is a string of the form \"NAME=VALUE\".  The setting
+reaches only the Claude Code process that whisper-dvr starts and
+leaves the environment of Emacs alone.
+
+Claude Code keeps notes in an auto memory folder and loads them into
+every new session, which includes print mode.  Notes saved during
+earlier transcript runs can then return with each new transcript.  The
+default turns auto memory off for these jobs.  Set this option to nil
+to let Claude Code use its auto memory."
   :type '(repeat string)
   :group 'whisper-dvr-llm)
 
@@ -2438,7 +2471,7 @@ the process command line."
 (defun whisper-dvr--llm-request-spec (transcript)
   "Return the process spec that sends TRANSCRIPT to the current backend.
 The spec is a plist with the keys :command, :stdin, :parser,
-:temp-files, and :unset-env."
+:temp-files, :unset-env, and :set-env."
   (pcase whisper-dvr-llm-backend
     ('claude-code
      (list :command (append (list (whisper-dvr--llm-program
@@ -2452,6 +2485,7 @@ The spec is a plist with the keys :command, :stdin, :parser,
                             whisper-dvr-llm-claude-args)
            :stdin transcript
            :unset-env whisper-dvr-llm-claude-unset-env
+           :set-env whisper-dvr-llm-claude-set-env
            :parser #'identity))
     ('command
      (let ((model (or (whisper-dvr--llm-model) "")))
@@ -2668,7 +2702,10 @@ message.  SPEC is a plist from `whisper-dvr--llm-request-spec'."
                :callback callback :errback errback)))
     (let* ((process-environment
             ;; A bare NAME without "=" unsets that variable for the child.
-            (append (plist-get spec :unset-env) process-environment))
+            ;; The first entry for a name wins, so these come first.
+            (append (plist-get spec :set-env)
+                    (plist-get spec :unset-env)
+                    process-environment))
            (proc (make-process :name "whisper-dvr-llm"
                               :buffer stdout
                               :stderr stderr

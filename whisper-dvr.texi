@@ -7,7 +7,7 @@
 @c %**end of header
 
 @copying
-This manual is for whisper-dvr (version 0.8.0).
+This manual is for whisper-dvr (version 0.8.1).
 
 Copyright @copyright{} 2024-2026 Blaine Mooers.
 
@@ -283,6 +283,94 @@ working, the result is inserted after it instead of replacing it.
 A prefix argument to @code{whisper-dvr} inverts
 @code{whisper-dvr-llm-postprocess} for one run.
 
+@section Keeping earlier transcripts out of the result
+@cindex auto memory, Claude Code
+@cindex earlier transcripts in the result
+@cindex isolation of Claude Code jobs
+
+Each recording should be parsed by itself.  Two features of Claude
+Code can break that rule, and the symptom is a parsed transcript that
+also holds text from several earlier recordings.
+
+@enumerate
+@item
+Auto memory.  Claude Code writes notes to
+@file{~/.claude/projects/@var{project}/memory/} and loads the start of
+@file{MEMORY.md} into every new session, including the print-mode
+sessions that whisper-dvr starts.  Notes saved during earlier
+transcript runs can return with each new transcript.
+@item
+File tools.  The argument @option{--allowedTools Skill} approves the
+Skill tool in advance, but it does not remove the other tools.  The
+job runs in the directory of the buffer that receives the text, so
+Claude Code could read older transcripts and @file{_parsed.tex} files
+stored there.
+@end enumerate
+
+Think of a lab notebook left open on the bench.  Each new student
+copies the earlier entries into a fresh report.  The settings below
+close the notebook and leave only the page that was handed in.
+
+Since version 0.8.1, these settings are the package defaults, so a new
+installation needs no configuration.  The defaults are equivalent to
+the following.
+
+@lisp
+;; Turn off Claude Code auto memory for the jobs that whisper-dvr starts.
+(setq whisper-dvr-llm-claude-set-env
+      '("CLAUDE_CODE_DISABLE_AUTO_MEMORY=1"))
+
+;; Offer only the Skill tool, and do not save the session to disk.
+(setq whisper-dvr-llm-claude-args
+      '("--output-format" "text"
+        "--tools" "Skill"
+        "--allowedTools" "Skill"
+        "--no-session-persistence"))
+@end lisp
+
+@table @asis
+@item @env{CLAUDE_CODE_DISABLE_AUTO_MEMORY=1}
+Turns off auto memory, so no notes are loaded or written.
+@item @option{--tools Skill}
+Makes Skill the only available tool, so no files in the working
+directory can be read.
+@item @option{--allowedTools Skill}
+Lets the skill run without a permission prompt.
+@item @option{--no-session-persistence}
+Keeps the print-mode session from being saved to disk.
+@end table
+
+The variable in @code{whisper-dvr-llm-claude-set-env} reaches only the
+Claude Code process that whisper-dvr starts.  The environment of Emacs
+and of other packages is left alone.
+
+Two cases still need a change in your init file.
+
+@itemize @bullet
+@item
+If your init file sets @code{whisper-dvr-llm-claude-args}, your value
+replaces the default.  Add the @option{--tools} pair and
+@option{--no-session-persistence} to it, or remove your setting.
+@item
+If you run a version older than 0.8.1, add the @code{setq} of
+@code{whisper-dvr-llm-claude-args} shown above together with
+@code{(setenv "CLAUDE_CODE_DISABLE_AUTO_MEMORY" "1")}.  That
+@code{setenv} call applies to every @command{claude} process started
+from Emacs.
+@end itemize
+
+Type the quotation marks as straight ASCII quotes.  Curly quotes pasted
+from a web page or a chat window cause a @code{void-variable} error
+when Emacs starts.
+
+Run @kbd{M-x whisper-dvr-llm-test-backend} to confirm that the skill
+still loads.  If the test fails on your version of Claude Code, remove
+the @option{--tools} pair and keep the other arguments.  Set
+@code{whisper-dvr-llm-claude-set-env} to @code{nil} if you want Claude
+Code to use its auto memory.  Notes that were saved before the change
+stay on disk but are no longer loaded.  Delete them from the
+@file{memory} folder of the matching project if you want them gone.
+
 @section Choosing the model or harness
 @cindex backends, LLM
 @cindex local models
@@ -418,7 +506,16 @@ The prompt passed to @command{claude -p}.
 
 @item whisper-dvr-llm-claude-args
 @vindex whisper-dvr-llm-claude-args
-Extra arguments for Claude Code.
+Extra arguments for Claude Code.  The default is @option{--output-format
+text --tools Skill --allowedTools Skill --no-session-persistence},
+which isolates each job from earlier transcripts.
+
+@item whisper-dvr-llm-claude-set-env
+@vindex whisper-dvr-llm-claude-set-env
+Environment variables set before Claude Code runs, each of the form
+@samp{NAME=VALUE}.  The default sets
+@env{CLAUDE_CODE_DISABLE_AUTO_MEMORY} to 1, so notes from earlier runs
+are not loaded.  Only the Claude Code process is affected.
 
 @item whisper-dvr-llm-claude-unset-env
 @vindex whisper-dvr-llm-claude-unset-env
@@ -808,6 +905,19 @@ find @command{claude}, @command{curl}, or the configured command.  Set
 fails, the raw transcript stays in the buffer and the message names the
 cause, such as an HTTP 401 for a bad key or a timeout for a long
 recording on a slow local model.
+
+@section Parsed transcript contains earlier recordings
+@cindex earlier transcripts in the result
+
+The parsed text holds material from recordings that were transcribed
+earlier, although the raw transcript was correct.  Run @kbd{C-u M-x
+whisper-dvr} once to skip the LLM and confirm that the raw transcript
+holds only the current recording.  The cause is then on the Claude
+Code side, where auto memory or the file tools bring old transcripts
+into the new session.  Version 0.8.1 prevents this by default.  If
+your init file sets @code{whisper-dvr-llm-claude-args}, or if you run
+an older version, apply the settings in the section ``Keeping earlier
+transcripts out of the result'' of the chapter on LLM post-processing.
 
 @section DVR directory does not exist
 @cindex error, directory not found
