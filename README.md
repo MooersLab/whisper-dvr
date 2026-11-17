@@ -41,6 +41,7 @@ It reduces friction when transcribing multiple audio files daily, such as those 
   - [Tutorial: Batch Processing Multiple Recordings](#tutorial-batch-processing-multiple-recordings)
 - [LLM Post-Processing](#llm-post-processing)
   - [Tutorial: Turning on post-processing with Claude Code](#tutorial-turning-on-post-processing-with-claude-code)
+  - [Keeping earlier transcripts out of the result](#keeping-earlier-transcripts-out-of-the-result)
   - [Choosing the model or harness](#choosing-the-model-or-harness)
 - [Automatic Deletion of Processed Recordings](#automatic-deletion-of-processed-recordings)
 - [Text Replacements](#text-replacements)
@@ -432,6 +433,52 @@ Claude Code is a harness, so it loads the `transcript-parser` skill from `~/.cla
 
 A prefix argument inverts the setting for one run.
 `C-u M-x whisper-dvr` skips the LLM when post-processing is on, and uses it when post-processing is off.
+
+### Keeping earlier transcripts out of the result
+
+Each recording should be parsed by itself.
+Two features of Claude Code can break that rule, and the symptom is a parsed transcript that also holds text from several earlier recordings.
+
+1. **Auto memory.** Claude Code writes notes to `~/.claude/projects/<project>/memory/` and loads the start of `MEMORY.md` into every new session, including the print-mode sessions that whisper-dvr starts. Notes saved during earlier transcript runs can return with each new transcript.
+2. **File tools.** The default `--allowedTools Skill` argument approves the Skill tool in advance, but it does not remove the other tools. The job runs in the directory of the buffer that receives the text, so Claude Code can still read older transcripts and `_parsed.tex` files stored there.
+
+Think of a lab notebook left open on the bench.
+Each new student copies the earlier entries into a fresh report.
+The settings below close the notebook and leave only the page that was handed in.
+
+Add the following to your init file.
+
+```elisp
+;; Stop Claude Code from loading or writing auto memory in jobs started by Emacs.
+(setenv "CLAUDE_CODE_DISABLE_AUTO_MEMORY" "1")
+
+;; Offer only the Skill tool, and do not save the session to disk.
+(setq whisper-dvr-llm-claude-args
+      '("--output-format" "text"
+        "--tools" "Skill"
+        "--allowedTools" "Skill"
+        "--no-session-persistence"))
+```
+
+| Setting | What it does |
+|---------|--------------|
+| `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` | Turns off auto memory, so no notes are loaded or written |
+| `--tools Skill` | Makes Skill the only available tool, so no files in the working directory can be read |
+| `--allowedTools Skill` | Lets the skill run without a permission prompt |
+| `--no-session-persistence` | Keeps the print-mode session from being saved to disk |
+
+The `setenv` call applies to every `claude` process started from Emacs, not only to whisper-dvr.
+Type the quotation marks as straight ASCII quotes.
+Curly quotes pasted from a web page or a chat window cause a `void-variable` error when Emacs starts.
+
+Restart Emacs, and then check the result.
+
+1. `M-: (getenv "CLAUDE_CODE_DISABLE_AUTO_MEMORY")` should return `"1"`.
+2. `M-x whisper-dvr-llm-test-backend` should return the parsed sample, which shows that the skill still loads.
+
+If the test fails on your version of Claude Code, remove the `"--tools" "Skill"` pair and keep the other arguments.
+Notes that were saved before the change stay on disk but are no longer loaded.
+Delete them from the `memory` folder of the matching project if you want them gone.
 
 ### Choosing the model or harness
 
@@ -947,6 +994,13 @@ An HTTP 401 means the API key is wrong.
 An HTTP 404 from a local server usually means that the model named in `whisper-dvr-llm-model` has not been pulled.
 A timeout means the model needed longer than `whisper-dvr-llm-timeout` seconds, which happens with long recordings on small local machines.
 Run `M-x whisper-dvr-llm-process-region` on the raw text to try again.
+
+### Parsed transcript contains earlier recordings
+
+The parsed text holds material from recordings that were transcribed earlier, although the raw transcript was correct.
+Run `C-u M-x whisper-dvr` once to skip the LLM and confirm that the raw transcript holds only the current recording.
+The cause is then on the Claude Code side, where auto memory or the file tools bring old transcripts into the new session.
+Apply the settings in [Keeping earlier transcripts out of the result](#keeping-earlier-transcripts-out-of-the-result).
 
 ### DVR Directory Not Found
 
