@@ -1132,9 +1132,25 @@ Also check that AppleDouble files and a space in the path cause no harm."
     (should (equal (cadr (member "--tools" args)) "Skill"))
     (should (equal (cadr (member "--allowedTools" args)) "Skill"))
     (should (equal (cadr (member "--output-format" args)) "text"))
-    (should (member "--no-session-persistence" args)))
+    (should (member "--no-session-persistence" args))
+    ;; No MCP server is loaded, so a bad tool schema cannot fail the job.
+    (should (member "--strict-mcp-config" args))
+    (should-not (member "--mcp-config" args)))
   (should (equal (default-value 'whisper-dvr-llm-claude-set-env)
                  '("CLAUDE_CODE_DISABLE_AUTO_MEMORY=1"))))
+
+(ert-deftest whisper-dvr-test-llm-claude-code-command-carries-default-args ()
+  "Test that the default arguments reach the harness command line."
+  (whisper-dvr-test--with-llm-defaults
+    ;; The macro above rebinds the option, so read its standard value.
+    (let* ((whisper-dvr-llm-claude-args
+            (eval (car (get 'whisper-dvr-llm-claude-args 'standard-value)) t))
+           (command (plist-get (whisper-dvr--llm-request-spec "x") :command)))
+      (should (equal (car command) "claude"))
+      (should (equal (cadr command) "-p"))
+      (should (equal (last command 6)
+                     '("--tools" "Skill" "--allowedTools" "Skill"
+                       "--no-session-persistence" "--strict-mcp-config"))))))
 
 (ert-deftest whisper-dvr-test-llm-claude-code-spec-carries-set-env ()
   "Test that only the harness spec carries the environment settings."

@@ -5,7 +5,7 @@
 ;; URL: https://github.com/MooersLab/whisper-dvr
 ;; Keywords: multimedia, convenience
 ;; Package-Requires: ((emacs "27.1") (whisper "0.1"))
-;; Version: 0.8.1
+;; Version: 0.8.2
 
 ;;; Commentary:
 ;; This package provides functions to list, transcribe, and manage MP3 files
@@ -40,6 +40,10 @@
 ;; tool, and without saving the session, so text from earlier
 ;; recordings cannot leak into the parsed transcript.  See
 ;; `whisper-dvr-llm-claude-args' and `whisper-dvr-llm-claude-set-env'.
+;;
+;; Version 0.8.2 adds --strict-mcp-config to the default arguments, so
+;; a Claude Code job loads no MCP servers.  A server with a tool schema
+;; that the API rejects can then no longer make the whole job fail.
 
 ;;; Code:
 
@@ -343,7 +347,8 @@ A \"%s\" in the string is replaced by `whisper-dvr-llm-skill-name'."
   '("--output-format" "text"
     "--tools" "Skill"
     "--allowedTools" "Skill"
-    "--no-session-persistence")
+    "--no-session-persistence"
+    "--strict-mcp-config")
   "Extra command line arguments for the `claude-code' backend.
 These follow the prompt and the optional --model argument.
 
@@ -352,7 +357,12 @@ cannot reach the parsed transcript.  The pair --tools Skill makes
 Skill the only tool, so Claude Code cannot read older transcripts in
 the working directory.  The pair --allowedTools Skill lets the skill
 run without a permission prompt.  The flag --no-session-persistence
-keeps the print-mode session from being saved to disk.  When the skill
+keeps the print-mode session from being saved to disk.  The flag
+--strict-mcp-config makes Claude Code load only the MCP servers named
+on the command line, and none are named, so no MCP server is loaded.
+A server with a tool schema that the API rejects would otherwise make
+the job fail with an HTTP 400 error, and a file system server could
+read older transcripts.  When the skill
 does not load on your version of Claude Code, remove the --tools pair.
 See also `whisper-dvr-llm-claude-set-env'."
   :type '(repeat string)

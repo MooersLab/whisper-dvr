@@ -7,7 +7,7 @@
 @c %**end of header
 
 @copying
-This manual is for whisper-dvr (version 0.8.1).
+This manual is for whisper-dvr (version 0.8.2).
 
 Copyright @copyright{} 2024-2026 Blaine Mooers.
 
@@ -288,7 +288,7 @@ A prefix argument to @code{whisper-dvr} inverts
 @cindex earlier transcripts in the result
 @cindex isolation of Claude Code jobs
 
-Each recording should be parsed by itself.  Two features of Claude
+Each recording should be parsed by itself.  Three features of Claude
 Code can break that rule, and the symptom is a parsed transcript that
 also holds text from several earlier recordings.
 
@@ -305,13 +305,19 @@ Skill tool in advance, but it does not remove the other tools.  The
 job runs in the directory of the buffer that receives the text, so
 Claude Code could read older transcripts and @file{_parsed.tex} files
 stored there.
+@item
+MCP servers.  Claude Code loads every MCP server and connector that is
+configured for your account and for the working directory.  A file
+system server can read older transcripts even when the built-in file
+tools are removed.  A server with a tool schema that the API rejects
+makes the whole job fail with an HTTP 400 error.
 @end enumerate
 
 Think of a lab notebook left open on the bench.  Each new student
 copies the earlier entries into a fresh report.  The settings below
 close the notebook and leave only the page that was handed in.
 
-Since version 0.8.1, these settings are the package defaults, so a new
+Since version 0.8.2, these settings are the package defaults, so a new
 installation needs no configuration.  The defaults are equivalent to
 the following.
 
@@ -325,7 +331,8 @@ the following.
       '("--output-format" "text"
         "--tools" "Skill"
         "--allowedTools" "Skill"
-        "--no-session-persistence"))
+        "--no-session-persistence"
+        "--strict-mcp-config"))
 @end lisp
 
 @table @asis
@@ -338,6 +345,9 @@ directory can be read.
 Lets the skill run without a permission prompt.
 @item @option{--no-session-persistence}
 Keeps the print-mode session from being saved to disk.
+@item @option{--strict-mcp-config}
+Loads only the MCP servers named on the command line.  None are named,
+so no MCP server is loaded.
 @end table
 
 The variable in @code{whisper-dvr-llm-claude-set-env} reaches only the
@@ -349,10 +359,11 @@ Two cases still need a change in your init file.
 @itemize @bullet
 @item
 If your init file sets @code{whisper-dvr-llm-claude-args}, your value
-replaces the default.  Add the @option{--tools} pair and
-@option{--no-session-persistence} to it, or remove your setting.
+replaces the default.  Add the @option{--tools} pair,
+@option{--no-session-persistence}, and @option{--strict-mcp-config} to
+it, or remove your setting.
 @item
-If you run a version older than 0.8.1, add the @code{setq} of
+If you run a version older than 0.8.2, add the @code{setq} of
 @code{whisper-dvr-llm-claude-args} shown above together with
 @code{(setenv "CLAUDE_CODE_DISABLE_AUTO_MEMORY" "1")}.  That
 @code{setenv} call applies to every @command{claude} process started
@@ -362,6 +373,12 @@ from Emacs.
 Type the quotation marks as straight ASCII quotes.  Curly quotes pasted
 from a web page or a chat window cause a @code{void-variable} error
 when Emacs starts.
+
+If you install whisper-dvr with straight.el or another package manager,
+Emacs loads the copy of the package that the manager keeps, not your
+working copy of the repository.  Update that copy, for example with
+@kbd{M-x straight-pull-package} and @kbd{M-x straight-rebuild-package},
+and restart Emacs before you remove settings from your init file.
 
 Run @kbd{M-x whisper-dvr-llm-test-backend} to confirm that the skill
 still loads.  If the test fails on your version of Claude Code, remove
@@ -507,8 +524,9 @@ The prompt passed to @command{claude -p}.
 @item whisper-dvr-llm-claude-args
 @vindex whisper-dvr-llm-claude-args
 Extra arguments for Claude Code.  The default is @option{--output-format
-text --tools Skill --allowedTools Skill --no-session-persistence},
-which isolates each job from earlier transcripts.
+text --tools Skill --allowedTools Skill --no-session-persistence
+--strict-mcp-config}, which isolates each job from earlier transcripts
+and from MCP servers.
 
 @item whisper-dvr-llm-claude-set-env
 @vindex whisper-dvr-llm-claude-set-env
@@ -906,6 +924,14 @@ fails, the raw transcript stays in the buffer and the message names the
 cause, such as an HTTP 401 for a bad key or a timeout for a long
 recording on a slow local model.
 
+An HTTP 400 from the @code{claude-code} backend with a message about
+@samp{input_schema} means that an MCP server or connector configured
+for Claude Code publishes a tool that the API rejects.  The transcript
+is not at fault.  Version 0.8.2 passes @option{--strict-mcp-config} by
+default, so no MCP server is loaded.  If your init file sets
+@code{whisper-dvr-llm-claude-args}, add that flag to your value.  Run
+@kbd{M-x whisper-dvr-llm-process-region} on the raw text to try again.
+
 @section Parsed transcript contains earlier recordings
 @cindex earlier transcripts in the result
 
@@ -913,8 +939,9 @@ The parsed text holds material from recordings that were transcribed
 earlier, although the raw transcript was correct.  Run @kbd{C-u M-x
 whisper-dvr} once to skip the LLM and confirm that the raw transcript
 holds only the current recording.  The cause is then on the Claude
-Code side, where auto memory or the file tools bring old transcripts
-into the new session.  Version 0.8.1 prevents this by default.  If
+Code side, where auto memory, the file tools, or an MCP server bring
+old transcripts into the new session.  Version 0.8.2 prevents this by
+default.  If
 your init file sets @code{whisper-dvr-llm-claude-args}, or if you run
 an older version, apply the settings in the section ``Keeping earlier
 transcripts out of the result'' of the chapter on LLM post-processing.

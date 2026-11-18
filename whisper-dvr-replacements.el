@@ -5,7 +5,7 @@
 ;; URL: https://github.com/MooersLab/whisper-dvr
 ;; Keywords: multimedia, convenience, wp
 ;; Package-Requires: ((emacs "27.1"))
-;; Version: 0.8.1
+;; Version: 0.8.2
 
 ;;; Commentary:
 ;; This library applies a table of text replacements to prose.  The
