@@ -1,7 +1,7 @@
 This is whisper-dvr.info, produced by makeinfo version 7.3 from
 whisper-dvr.texi.
 
-This manual is for whisper-dvr (version 0.8.1).
+This manual is for whisper-dvr (version 0.8.2).
 
    Copyright © 2024-2026 Blaine Mooers.
 
@@ -24,7 +24,7 @@ whisper-dvr
 whisper-dvr is an Emacs package that provides a convenient interface for
 transcribing audio files from a digital voice recorder using whisper.el.
 
-   This manual is for whisper-dvr (version 0.8.1).
+   This manual is for whisper-dvr (version 0.8.2).
 
    Copyright © 2024-2026 Blaine Mooers.
 
@@ -232,9 +232,14 @@ working, the result is inserted after it instead of replacing it.
 5.2 Keeping earlier transcripts out of the result
 =================================================
 
-Each recording should be parsed by itself.  Two features of Claude Code
-can break that rule, and the symptom is a parsed transcript that also
-holds text from several earlier recordings.
+Each recording should be parsed by itself.  Three features of Claude
+Code can break that rule, and the symptom is a parsed transcript that
+also holds text from several earlier recordings.  The settings in this
+section close those three routes.  They do not help when the raw
+transcript already holds the earlier text before the LLM runs.  That
+case has a different cause inside Emacs, and the section "Transcript
+contains earlier recordings" of the chapter on troubleshooting describes
+it.
 
   1. Auto memory.  Claude Code writes notes to
      ‘~/.claude/projects/PROJECT/memory/’ and loads the start of
@@ -246,12 +251,17 @@ holds text from several earlier recordings.
      runs in the directory of the buffer that receives the text, so
      Claude Code could read older transcripts and ‘_parsed.tex’ files
      stored there.
+  3. MCP servers.  Claude Code loads every MCP server and connector that
+     is configured for your account and for the working directory.  A
+     file system server can read older transcripts even when the
+     built-in file tools are removed.  A server with a tool schema that
+     the API rejects makes the whole job fail with an HTTP 400 error.
 
    Think of a lab notebook left open on the bench.  Each new student
 copies the earlier entries into a fresh report.  The settings below
 close the notebook and leave only the page that was handed in.
 
-   Since version 0.8.1, these settings are the package defaults, so a
+   Since version 0.8.2, these settings are the package defaults, so a
 new installation needs no configuration.  The defaults are equivalent to
 the following.
 
@@ -264,7 +274,8 @@ the following.
            '("--output-format" "text"
              "--tools" "Skill"
              "--allowedTools" "Skill"
-             "--no-session-persistence"))
+             "--no-session-persistence"
+             "--strict-mcp-config"))
 
 ‘CLAUDE_CODE_DISABLE_AUTO_MEMORY=1’
      Turns off auto memory, so no notes are loaded or written.
@@ -275,6 +286,9 @@ the following.
      Lets the skill run without a permission prompt.
 ‘--no-session-persistence’
      Keeps the print-mode session from being saved to disk.
+‘--strict-mcp-config’
+     Loads only the MCP servers named on the command line.  None are
+     named, so no MCP server is loaded.
 
    The variable in ‘whisper-dvr-llm-claude-set-env’ reaches only the
 Claude Code process that whisper-dvr starts.  The environment of Emacs
@@ -283,9 +297,10 @@ and of other packages is left alone.
    Two cases still need a change in your init file.
 
    • If your init file sets ‘whisper-dvr-llm-claude-args’, your value
-     replaces the default.  Add the ‘--tools’ pair and
-     ‘--no-session-persistence’ to it, or remove your setting.
-   • If you run a version older than 0.8.1, add the ‘setq’ of
+     replaces the default.  Add the ‘--tools’ pair,
+     ‘--no-session-persistence’, and ‘--strict-mcp-config’ to it, or
+     remove your setting.
+   • If you run a version older than 0.8.2, add the ‘setq’ of
      ‘whisper-dvr-llm-claude-args’ shown above together with ‘(setenv
      "CLAUDE_CODE_DISABLE_AUTO_MEMORY" "1")’.  That ‘setenv’ call
      applies to every ‘claude’ process started from Emacs.
@@ -293,6 +308,12 @@ and of other packages is left alone.
    Type the quotation marks as straight ASCII quotes.  Curly quotes
 pasted from a web page or a chat window cause a ‘void-variable’ error
 when Emacs starts.
+
+   If you install whisper-dvr with straight.el or another package
+manager, Emacs loads the copy of the package that the manager keeps, not
+your working copy of the repository.  Update that copy, for example with
+‘M-x straight-pull-package’ and ‘M-x straight-rebuild-package’, and
+restart Emacs before you remove settings from your init file.
 
    Run ‘M-x whisper-dvr-llm-test-backend’ to confirm that the skill
 still loads.  If the test fails on your version of Claude Code, remove
@@ -413,8 +434,9 @@ matching project if you want them gone.
 
 ‘whisper-dvr-llm-claude-args’
      Extra arguments for Claude Code.  The default is ‘--output-format
-     text --tools Skill --allowedTools Skill --no-session-persistence’,
-     which isolates each job from earlier transcripts.
+     text --tools Skill --allowedTools Skill --no-session-persistence
+     --strict-mcp-config’, which isolates each job from earlier
+     transcripts and from MCP servers.
 
 ‘whisper-dvr-llm-claude-set-env’
      Environment variables set before Claude Code runs, each of the form
@@ -747,18 +769,97 @@ the raw transcript stays in the buffer and the message names the cause,
 such as an HTTP 401 for a bad key or a timeout for a long recording on a
 slow local model.
 
-9.2 Parsed transcript contains earlier recordings
-=================================================
+   An HTTP 400 from the ‘claude-code’ backend with a message about
+‘input_schema’ means that an MCP server or connector configured for
+Claude Code publishes a tool that the API rejects.  The transcript is
+not at fault.  Version 0.8.2 passes ‘--strict-mcp-config’ by default, so
+no MCP server is loaded.  If your init file sets
+‘whisper-dvr-llm-claude-args’, add that flag to your value.  Run ‘M-x
+whisper-dvr-llm-process-region’ on the raw text to try again.
 
-The parsed text holds material from recordings that were transcribed
-earlier, although the raw transcript was correct.  Run ‘C-u M-x
-whisper-dvr’ once to skip the LLM and confirm that the raw transcript
-holds only the current recording.  The cause is then on the Claude Code
-side, where auto memory or the file tools bring old transcripts into the
-new session.  Version 0.8.1 prevents this by default.  If your init file
-sets ‘whisper-dvr-llm-claude-args’, or if you run an older version,
-apply the settings in the section "Keeping earlier transcripts out of
-the result" of the chapter on LLM post-processing.
+9.2 Transcript contains earlier recordings
+==========================================
+
+The inserted text holds material from recordings that were transcribed
+earlier in the same Emacs session.  Find out first where the old text
+enters.
+
+   Run ‘C-u M-x whisper-dvr’ once to skip the LLM, or dictate with ‘M-x
+whisper-run’, and look at the raw text.  Raw Whisper output from several
+runs has a recognizable shape.  Each run is on its own line, every line
+after the first begins with a space, and a line often ends with a marker
+such as ‘[BLANK_AUDIO]’.
+
+The raw transcript holds earlier recordings
+-------------------------------------------
+
+The cause is inside Emacs, and it also affects plain dictation with
+whisper.el.  whisper.el collects the output of each run in a buffer
+named ‘*whisper-stdout*’ and kills that buffer when the run ends.  If
+the kill fails, each new run is appended to the old text, and the whole
+stack is inserted.  Think of a beaker that is supposed to be emptied
+after each sample.  Someone has taped a "do not discard" label on it, so
+each new sample is poured on top of the old ones.
+
+   Confirm the cause with ‘M-:’ after a run.
+
+     ;; Non-nil means the buffer survived the run.
+     (get-buffer "*whisper-stdout*")
+
+     ;; An error or nil means that something blocks the kill.
+     (with-current-buffer "*whisper-stdout*"
+       (run-hook-with-args-until-failure 'kill-buffer-query-functions))
+
+   One known cause is the combination of perspective.el with a session
+manager such as easysession or desktop.el.  perspective.el keeps its
+perspectives in a hash table that is stored in the frame parameter
+‘persp--hash’.  A session file cannot hold a hash table, so the
+placeholder string ‘Unprintable entity’ is saved in its place and
+restored at the next startup.  perspective.el then finds a string where
+it expects a hash table, and every attempt to kill a normally named
+buffer fails with the error ‘Wrong type argument: hash-table-p,
+"Unprintable entity"’.  The same error can appear from unrelated
+packages, because buffer killing is broken for all of them.
+
+   Keep the perspective.el frame parameters out of the session file.
+Add the following to your init file before the session manager is set
+up, and restart Emacs.
+
+     ;; perspective.el keeps live objects in frame parameters.  A session
+     ;; file cannot hold them, so do not save or restore them.
+     (require 'frameset)
+     (dolist (param '(persp--hash persp--curr persp--last
+                      persp--recursive persp--modestring))
+       (setf (alist-get param frameset-filter-alist) :never))
+
+   After the restart, ‘(hash-table-p (frame-parameter nil
+'persp--hash))’ should return ‘t’, and ‘(get-buffer "*whisper-stdout*")’
+should return ‘nil’ after a run.
+
+   If you cannot find what blocks the kill, the following advice empties
+the buffer before each run.  It treats the symptom and leaves the cause
+in place.
+
+     (defun my/whisper-clear-stdout (&rest _)
+       "Empty the whisper.el output buffer before a new transcription."
+       (when-let* ((buf (get-buffer "*whisper-stdout*")))
+         (with-current-buffer buf
+           (let ((inhibit-read-only t))
+             (erase-buffer)))))
+
+     (with-eval-after-load 'whisper
+       (advice-add 'whisper--transcribe-audio :before #'my/whisper-clear-stdout))
+
+The raw transcript is correct
+-----------------------------
+
+Only the parsed text holds earlier recordings.  The cause is then on the
+Claude Code side, where auto memory, the file tools, or an MCP server
+bring old transcripts into the new session.  Version 0.8.2 prevents this
+by default.  If your init file sets ‘whisper-dvr-llm-claude-args’, or if
+you run an older version, apply the settings in the section "Keeping
+earlier transcripts out of the result" of the chapter on LLM
+post-processing.
 
 9.3 DVR directory does not exist
 ================================
@@ -825,7 +926,7 @@ Concept Index
 
 * auto memory, Claude Code:              LLM Post-Processing. (line  39)
 * automatic deletion:                    Automatic Deletion.  (line   6)
-* backends, LLM:                         LLM Post-Processing. (line 112)
+* backends, LLM:                         LLM Post-Processing. (line 133)
 * Claude skill:                          Text Replacements.   (line 104)
 * commands:                              Usage.               (line  48)
 * configuration:                         Configuration.       (line   6)
@@ -836,31 +937,35 @@ Concept Index
 * customization, directory:              Customization.       (line   9)
 * customization, file extensions:        Customization.       (line  39)
 * customization, internal memory:        Customization.       (line  28)
-* customization, LLM:                    LLM Post-Processing. (line 181)
+* customization, LLM:                    LLM Post-Processing. (line 202)
 * customization, SD card:                Customization.       (line  18)
 * customization, text replacements:      Text Replacements.   (line 112)
 * deleting recordings:                   Automatic Deletion.  (line   6)
 * directory, changing:                   Usage.               (line  22)
 * earlier transcripts in the result:     LLM Post-Processing. (line  39)
-* earlier transcripts in the result <1>: Troubleshooting.     (line  19)
-* error, directory not found:            Troubleshooting.     (line  32)
+* earlier transcripts in the result <1>: Troubleshooting.     (line  27)
+* easysession:                           Troubleshooting.     (line  27)
+* error, directory not found:            Troubleshooting.     (line 111)
 * error, LLM:                            Troubleshooting.     (line   9)
-* error, no files found:                 Troubleshooting.     (line  40)
-* error, wrong number of arguments:      Troubleshooting.     (line  48)
+* error, no files found:                 Troubleshooting.     (line 119)
+* error, wrong number of arguments:      Troubleshooting.     (line 127)
 * installation, manual:                  Installation.        (line  18)
 * installation, straight.el:             Installation.        (line   9)
 * isolation of Claude Code jobs:         LLM Post-Processing. (line  39)
 * LLM post-processing:                   LLM Post-Processing. (line   6)
-* local models:                          LLM Post-Processing. (line 112)
+* local models:                          LLM Post-Processing. (line 133)
 * memory card:                           Usage.               (line  29)
+* perspective.el:                        Troubleshooting.     (line  27)
 * SD card:                               Usage.               (line  29)
+* session manager, frame parameters:     Troubleshooting.     (line  27)
 * text replacements:                     Text Replacements.   (line   6)
 * tiers, replacement:                    Text Replacements.   (line  22)
 * transcript-parser skill:               LLM Post-Processing. (line   6)
 * troubleshooting:                       Troubleshooting.     (line   6)
 * usage, basic:                          Usage.               (line   9)
 * Voice-In Plus:                         Text Replacements.   (line   6)
-* whisper-file, API change:              Troubleshooting.     (line  48)
+* whisper-file, API change:              Troubleshooting.     (line 127)
+* whisper-stdout buffer:                 Troubleshooting.     (line  27)
 
 Function Index
 ==============
@@ -869,12 +974,12 @@ Function Index
 * Menu:
 
 * whisper-dvr:                           Usage.               (line  49)
-* whisper-dvr-llm-cancel:                LLM Post-Processing. (line 167)
-* whisper-dvr-llm-process-file:          LLM Post-Processing. (line 162)
-* whisper-dvr-llm-process-region:        LLM Post-Processing. (line 158)
-* whisper-dvr-llm-select-backend:        LLM Post-Processing. (line 155)
-* whisper-dvr-llm-show-log:              LLM Post-Processing. (line 174)
-* whisper-dvr-llm-test-backend:          LLM Post-Processing. (line 170)
+* whisper-dvr-llm-cancel:                LLM Post-Processing. (line 188)
+* whisper-dvr-llm-process-file:          LLM Post-Processing. (line 183)
+* whisper-dvr-llm-process-region:        LLM Post-Processing. (line 179)
+* whisper-dvr-llm-select-backend:        LLM Post-Processing. (line 176)
+* whisper-dvr-llm-show-log:              LLM Post-Processing. (line 195)
+* whisper-dvr-llm-test-backend:          LLM Post-Processing. (line 191)
 * whisper-dvr-replacements-apply-buffer: Text Replacements.   (line  79)
 * whisper-dvr-replacements-apply-file:   Text Replacements.   (line  83)
 * whisper-dvr-replacements-apply-region: Text Replacements.   (line  76)
@@ -888,7 +993,7 @@ Function Index
 * whisper-dvr-set-directory-to-sd-card:  Usage.               (line  29)
 * whisper-dvr-set-directory-to-sd-card <1>: Usage.            (line  59)
 * whisper-dvr-toggle-auto-delete:        Usage.               (line  72)
-* whisper-dvr-toggle-llm-postprocess:    LLM Post-Processing. (line 152)
+* whisper-dvr-toggle-llm-postprocess:    LLM Post-Processing. (line 173)
 * whisper-dvr-transcribe-file:           Usage.               (line  67)
 
 Variable Index
@@ -903,31 +1008,31 @@ Variable Index
 * whisper-dvr-directory:                 Customization.       (line   9)
 * whisper-dvr-file-extensions:           Customization.       (line  39)
 * whisper-dvr-internal-memory-directory: Customization.       (line  28)
-* whisper-dvr-llm-after-process-hook:    LLM Post-Processing. (line 268)
-* whisper-dvr-llm-api-key:               LLM Post-Processing. (line 198)
-* whisper-dvr-llm-api-url:               LLM Post-Processing. (line 195)
-* whisper-dvr-llm-backend:               LLM Post-Processing. (line 185)
-* whisper-dvr-llm-claude-args:           LLM Post-Processing. (line 219)
-* whisper-dvr-llm-claude-embed-skill:    LLM Post-Processing. (line 236)
-* whisper-dvr-llm-claude-program:        LLM Post-Processing. (line 212)
-* whisper-dvr-llm-claude-prompt:         LLM Post-Processing. (line 216)
-* whisper-dvr-llm-claude-set-env:        LLM Post-Processing. (line 224)
-* whisper-dvr-llm-claude-unset-env:      LLM Post-Processing. (line 230)
-* whisper-dvr-llm-command:               LLM Post-Processing. (line 239)
-* whisper-dvr-llm-curl-program:          LLM Post-Processing. (line 260)
-* whisper-dvr-llm-default-instructions:  LLM Post-Processing. (line 209)
-* whisper-dvr-llm-default-models:        LLM Post-Processing. (line 192)
-* whisper-dvr-llm-function:              LLM Post-Processing. (line 242)
-* whisper-dvr-llm-insert-method:         LLM Post-Processing. (line 245)
-* whisper-dvr-llm-max-tokens:            LLM Post-Processing. (line 254)
-* whisper-dvr-llm-model:                 LLM Post-Processing. (line 188)
-* whisper-dvr-llm-output-buffer-name:    LLM Post-Processing. (line 248)
-* whisper-dvr-llm-postprocess:           LLM Post-Processing. (line 182)
-* whisper-dvr-llm-skill-file:            LLM Post-Processing. (line 206)
-* whisper-dvr-llm-skill-name:            LLM Post-Processing. (line 202)
-* whisper-dvr-llm-temperature:           LLM Post-Processing. (line 257)
-* whisper-dvr-llm-timeout:               LLM Post-Processing. (line 251)
-* whisper-dvr-llm-wait-message:          LLM Post-Processing. (line 263)
+* whisper-dvr-llm-after-process-hook:    LLM Post-Processing. (line 290)
+* whisper-dvr-llm-api-key:               LLM Post-Processing. (line 219)
+* whisper-dvr-llm-api-url:               LLM Post-Processing. (line 216)
+* whisper-dvr-llm-backend:               LLM Post-Processing. (line 206)
+* whisper-dvr-llm-claude-args:           LLM Post-Processing. (line 240)
+* whisper-dvr-llm-claude-embed-skill:    LLM Post-Processing. (line 258)
+* whisper-dvr-llm-claude-program:        LLM Post-Processing. (line 233)
+* whisper-dvr-llm-claude-prompt:         LLM Post-Processing. (line 237)
+* whisper-dvr-llm-claude-set-env:        LLM Post-Processing. (line 246)
+* whisper-dvr-llm-claude-unset-env:      LLM Post-Processing. (line 252)
+* whisper-dvr-llm-command:               LLM Post-Processing. (line 261)
+* whisper-dvr-llm-curl-program:          LLM Post-Processing. (line 282)
+* whisper-dvr-llm-default-instructions:  LLM Post-Processing. (line 230)
+* whisper-dvr-llm-default-models:        LLM Post-Processing. (line 213)
+* whisper-dvr-llm-function:              LLM Post-Processing. (line 264)
+* whisper-dvr-llm-insert-method:         LLM Post-Processing. (line 267)
+* whisper-dvr-llm-max-tokens:            LLM Post-Processing. (line 276)
+* whisper-dvr-llm-model:                 LLM Post-Processing. (line 209)
+* whisper-dvr-llm-output-buffer-name:    LLM Post-Processing. (line 270)
+* whisper-dvr-llm-postprocess:           LLM Post-Processing. (line 203)
+* whisper-dvr-llm-skill-file:            LLM Post-Processing. (line 227)
+* whisper-dvr-llm-skill-name:            LLM Post-Processing. (line 223)
+* whisper-dvr-llm-temperature:           LLM Post-Processing. (line 279)
+* whisper-dvr-llm-timeout:               LLM Post-Processing. (line 273)
+* whisper-dvr-llm-wait-message:          LLM Post-Processing. (line 285)
 * whisper-dvr-replacements-before-llm-commands: Text Replacements.
                                                               (line 141)
 * whisper-dvr-replacements-context:      Text Replacements.   (line 128)
@@ -956,13 +1061,13 @@ Node: Installation2771
 Node: Configuration3418
 Node: Usage3763
 Node: LLM Post-Processing6417
-Node: Automatic Deletion17023
-Node: Text Replacements19909
-Node: Customization25962
-Node: Troubleshooting27198
-Node: Contributing29324
-Node: License29629
-Node: Index29979
+Node: Automatic Deletion18277
+Node: Text Replacements21163
+Node: Customization27216
+Node: Troubleshooting28452
+Node: Contributing34211
+Node: License34516
+Node: Index34866
 
 End Tag Table
 

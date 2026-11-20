@@ -438,6 +438,9 @@ A prefix argument inverts the setting for one run.
 
 Each recording should be parsed by itself.
 Three features of Claude Code can break that rule, and the symptom is a parsed transcript that also holds text from several earlier recordings.
+The settings in this section close those three routes.
+They do not help when the raw transcript already holds the earlier text before the LLM runs.
+That case has a different cause inside Emacs, and [Transcript contains earlier recordings](#transcript-contains-earlier-recordings) describes it.
 
 1. **Auto memory.** Claude Code writes notes to `~/.claude/projects/<project>/memory/` and loads the start of `MEMORY.md` into every new session, including the print-mode sessions that whisper-dvr starts. Notes saved during earlier transcript runs can return with each new transcript.
 2. **File tools.** The argument `--allowedTools Skill` approves the Skill tool in advance, but it does not remove the other tools. The job runs in the directory of the buffer that receives the text, so Claude Code could read older transcripts and `_parsed.tex` files stored there.
@@ -1012,10 +1015,69 @@ Version 0.8.2 passes `--strict-mcp-config` by default, so no MCP server is loade
 If your init file sets `whisper-dvr-llm-claude-args`, add that flag to your value.
 Run `M-x whisper-dvr-llm-process-region` on the raw text to try again.
 
-### Parsed transcript contains earlier recordings
+### Transcript contains earlier recordings
 
-The parsed text holds material from recordings that were transcribed earlier, although the raw transcript was correct.
-Run `C-u M-x whisper-dvr` once to skip the LLM and confirm that the raw transcript holds only the current recording.
+The inserted text holds material from recordings that were transcribed earlier in the same Emacs session.
+Find out first where the old text enters.
+
+Run `C-u M-x whisper-dvr` once to skip the LLM, or dictate with `M-x whisper-run`, and look at the raw text.
+Raw Whisper output from several runs has a recognizable shape.
+Each run is on its own line, every line after the first begins with a space, and a line often ends with a marker such as `[BLANK_AUDIO]`.
+
+**The raw transcript holds earlier recordings.**
+The cause is inside Emacs, and it also affects plain dictation with whisper.el.
+whisper.el collects the output of each run in a buffer named `*whisper-stdout*` and kills that buffer when the run ends.
+If the kill fails, each new run is appended to the old text, and the whole stack is inserted.
+Think of a beaker that is supposed to be emptied after each sample.
+Someone has taped a "do not discard" label on it, so each new sample is poured on top of the old ones.
+
+Confirm the cause with `M-:` after a run.
+
+```elisp
+;; Non-nil means the buffer survived the run.
+(get-buffer "*whisper-stdout*")
+
+;; An error or nil means that something blocks the kill.
+(with-current-buffer "*whisper-stdout*"
+  (run-hook-with-args-until-failure 'kill-buffer-query-functions))
+```
+
+One known cause is the combination of perspective.el with a session manager such as easysession or desktop.el.
+perspective.el keeps its perspectives in a hash table that is stored in the frame parameter `persp--hash`.
+A session file cannot hold a hash table, so the placeholder string "Unprintable entity" is saved in its place and restored at the next startup.
+perspective.el then finds a string where it expects a hash table, and every attempt to kill a normally named buffer fails with the error `Wrong type argument: hash-table-p, "Unprintable entity"`.
+The same error can appear from unrelated packages, because buffer killing is broken for all of them.
+
+Keep the perspective.el frame parameters out of the session file.
+Add the following to your init file before the session manager is set up, and restart Emacs.
+
+```elisp
+;; perspective.el keeps live objects in frame parameters.  A session
+;; file cannot hold them, so do not save or restore them.
+(require 'frameset)
+(dolist (param '(persp--hash persp--curr persp--last
+                 persp--recursive persp--modestring))
+  (setf (alist-get param frameset-filter-alist) :never))
+```
+
+After the restart, `(hash-table-p (frame-parameter nil 'persp--hash))` should return `t`, and `(get-buffer "*whisper-stdout*")` should return `nil` after a run.
+
+If you cannot find what blocks the kill, the following advice empties the buffer before each run.
+It treats the symptom and leaves the cause in place.
+
+```elisp
+(defun my/whisper-clear-stdout (&rest _)
+  "Empty the whisper.el output buffer before a new transcription."
+  (when-let* ((buf (get-buffer "*whisper-stdout*")))
+    (with-current-buffer buf
+      (let ((inhibit-read-only t))
+        (erase-buffer)))))
+
+(with-eval-after-load 'whisper
+  (advice-add 'whisper--transcribe-audio :before #'my/whisper-clear-stdout))
+```
+
+**The raw transcript is correct, and only the parsed text holds earlier recordings.**
 The cause is then on the Claude Code side, where auto memory, the file tools, or an MCP server bring old transcripts into the new session.
 Version 0.8.2 prevents this by default.
 If your init file sets `whisper-dvr-llm-claude-args`, or if you run an older version, apply the settings in [Keeping earlier transcripts out of the result](#keeping-earlier-transcripts-out-of-the-result).
